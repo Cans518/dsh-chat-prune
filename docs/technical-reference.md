@@ -49,6 +49,7 @@
 |---|---|---|
 | GET | `/dsh-chat-prune/ping` | 插件版本、生效配置和运行检测能力 |
 | GET | `/dsh-chat-prune/sessions` | 对话名单、配置、加载保护及 `missing` 标记 |
+| POST | `/dsh-chat-prune/sessions/action` | `{ "sessionId": "...", "action": "archive|unarchive|pin|unpin" }`，经宿主工作区服务执行 |
 | DELETE | `/dsh-chat-prune/sessions` | JSON 请求体 `{ "sessionId": "session-..." }` |
 | DELETE | `/dsh-chat-prune/sessions/<id>` | 删除指定对话 |
 | GET | `/dsh-chat-prune/client.js` | 构建后的普通客户端脚本 |
@@ -57,6 +58,14 @@
 主要状态码：400 参数或 JSON 无效；409 会话被占用或路径冲突；413 请求体过大；501 系统不支持在线删除；503 宿主服务不可用；500 文件或索引操作失败。
 
 失败响应可能附带 `partial`、`removed`、`backupDir`。`alreadyGone: true` 仍会检查并清理残留索引。
+
+名单附带 `managementVersion: 1`、`actions` 能力列表，以及每条记录的 `workspaceKey`、工作区显示名 `workspace`、磁盘 slug `workspaceSlug`、`archived` 和 `pinned`。新版批量窗口遇到没有此管理协议标识的旧宿主会禁用批量操作，要求重启生效。`mtime` 为会话目录内非临时普通文件（含嵌套目录）的最大文件修改时间；`bytes` 为这些文件的总大小。目录联接或符号链接会拒绝扫描，不跟随外部路径。扫描中消失的文件使该行快照失效，跳过该行供下次刷新重新读取。
+
+JSON 形式的删除请求可附带 `backup: true` 临时开启备份，无法关闭宿主已开启的全局备份。批量客户端同时提交 `protectPinned: true`、预览时的 `expectedMtime` 和 `expectedRevision`；后者是完整文件清单中相对路径、大小、mtime、ctime 的 SHA256 指纹，能检测最新时间不变的文件增删或变化，不是文件内容摘要。宿主在串行队列中及删除前核对，批量模式强制保留已加载会话，忽略全局 `allowRunning` 放宽配置。置顶在耗时扫描后及移除前复查；宿主未提供跨元数据和目录的条件删除事务，不能将此复查当成跨进程原子锁。单条删除保留原有配置语义。
+
+管理操作与删除共用每个 home 的串行队列。归档使用宿主默认活动检查，不传强制停止选项；归档清除 pin、unarchive 不恢复 pin，错误向客户端传播。每个请求各自提交，整批不构成原子事务。停止任务仅停止尚未发出的请求，不能回滚当前请求。
+
+保留规则在整个工作区按 `mtime` 降序、同时间按 ID 升序选出最近 N 条，在当前筛选范围内排除保留项、置顶、已加载、缺失、时间未知及未达到天数的条目。最终确认预览前重新计算；执行时再次校验每个目标。规则本身只返回候选，不执行操作。
 
 ## 客户端诊断
 
@@ -78,6 +87,8 @@ dshChatPrune.probe(document.elementFromPoint(x, y))
 ## 客户端入口
 
 - `client-core.js`：确认、管理窗口、兼容悬浮按钮和共享删除流程。
+- `client-manager.js`：管理窗口、分页选择、保留规则预览及可停止的逐条批量操作。
+- `lib/pruning-policy.js`：纯筛选、排序和保留规则，由构建内联进浏览器脚本。
 - `client.js`：由构建脚本生成的普通内联脚本，不手动修改。
 - `client-slot.js`：宿主原生模块，注入 `slots` 和 `sessions` 服务，将 React 组件注册到 `sidebar.workspaces.session.row.action`。
 

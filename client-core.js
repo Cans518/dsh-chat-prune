@@ -20,6 +20,8 @@
  * ─────────────────────────────────────────────────────────────
  */
 
+import { showConversationManager } from './client-manager.js'
+
 const name = 'dsh-chat-prune'
 
 const NS = 'settings.dsh-chat-prune'
@@ -45,6 +47,7 @@ const zh = {
   'state.running': '正在运行中，已拒绝删除',
   'state.hostOutdated': '宿主仍在运行旧版删除插件。请正常退出 DSH 后重新打开，再尝试删除。',
   'state.timeout': '请求超时，结果尚未确认。请刷新列表检查后再重试。',
+  'state.unknown': '未收到有效响应，结果尚未确认。请刷新列表检查后再重试。',
   'state.refreshFailed': '删除已完成，但列表刷新失败。请点击刷新列表。',
   'state.partial': '删除可能已部分完成。请修复上述错误后重试以清理残留索引。',
   'manage.title': '管理对话',
@@ -77,6 +80,7 @@ const en = {
   'state.running': 'Session is running; deletion refused',
   'state.hostOutdated': 'The host still runs the old deletion plugin. Quit DSH normally and reopen it before deleting.',
   'state.timeout': 'Request timed out; the result is unknown. Refresh the list before retrying.',
+  'state.unknown': 'No valid response was received; the result is unknown. Refresh before retrying.',
   'state.refreshFailed': 'Deletion completed, but refreshing failed. Refresh the list to check.',
   'state.partial': 'Deletion may have partly completed. Fix the error and retry to clean up remaining entries.',
   'manage.title': 'Manage conversations',
@@ -170,11 +174,15 @@ async function requestJson(url, init = {}) {
     if (!response.ok || data?.ok !== true) {
       const error = new Error(data?.error || `${response.status} ${response.statusText || ''}`)
       error.status = response.status
+      error.definitive = true
       error.partial = data?.partial
       error.backupDir = data?.backupDir
       throw error
     }
     return data
+  } catch (error) {
+    if (!error.definitive) error.outcomeUnknown = true
+    throw error
   } finally {
     clearTimeout(timer)
   }
@@ -200,7 +208,8 @@ async function refreshTitleMap(force = false) {
       byTitle.set(key, byTitle.has(key) ? null : row.id)
     }
     titleMap = { byTitle, fetchedAt: now, sessions: rows, config: data.config || {},
-      canDetectRunning: data.canDetectRunning, hostVersion: data.version }
+      canDetectRunning: data.canDetectRunning, hostVersion: data.version, actions: data.actions || [],
+      managementVersion: data.managementVersion }
     return titleMap
   })()
   try {
@@ -381,10 +390,11 @@ function ensureLayer() {
   max-height:80vh; padding:24px; border:0; border-radius:var(--dsw-radius-panel, 12px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
   box-shadow:var(--dsw-elevation-prominent, 0 0 0 1px var(--dshdc-border), 0 16px 48px #0003);
-  font:inherit; font-family:var(--dsw-font-family, inherit); line-height:1.5; overflow:auto; pointer-events:auto; }
+  font:inherit; font-family:var(--dsw-font-family, system-ui, sans-serif); line-height:1.5; overflow:auto; pointer-events:auto; }
 .dshdc-dialog::backdrop { background:var(--dsw-alias-bg-mask-1, #0008); backdrop-filter:var(--dsw-mask-blur, none); }
 .dshdc-dialog h2 { font-size:20px; margin:0 0 16px; }
-.dshdc-dialog input { box-sizing:border-box; width:100%; min-height:44px; padding:8px; margin:12px 0; font:inherit;
+.dshdc-dialog [hidden] { display:none !important; }
+.dshdc-dialog :is(input, select) { box-sizing:border-box; width:100%; min-height:44px; padding:8px; margin:12px 0; font:inherit;
   border:1px solid var(--dsw-alias-border-l4, var(--dshdc-border)); border-radius:var(--dsw-radius-md, 6px);
   background:var(--dsw-alias-bg-layer-1, Field); color:var(--dshdc-text); caret-color:var(--dshdc-focus); }
 .dshdc-dialog input::placeholder { color:var(--dsw-alias-label-tertiary, var(--dshdc-muted)); }
@@ -394,16 +404,44 @@ function ensureLayer() {
 .dshdc-dialog button:hover:not(:disabled) { background:var(--dshdc-hover); }
 .dshdc-dialog button:active:not(:disabled) { background:var(--dshdc-active); }
 .dshdc-dialog button:disabled { opacity:.55; cursor:wait; }
-.dshdc-dialog :is(button, input):focus-visible, #dshdc-manage:focus-visible {
+.dshdc-dialog :is(button, input, select, summary):focus-visible, #dshdc-manage:focus-visible {
   outline:var(--dsw-focus-ring-width, 2px) solid var(--dshdc-focus); outline-offset:2px; }
 .dshdc-actions { display:flex; justify-content:flex-end; gap:12px; flex-wrap:wrap; margin-top:20px; }
 #dshdc-manager > .dshdc-actions { position:sticky; top:-24px; padding:12px 0;
   background:var(--dshdc-surface); z-index:1; margin-top:0; }
+#dshdc-manager > .dshdc-actions h2 { margin:0 auto 0 0; align-self:center; }
 .dshdc-dialog button.dshdc-danger { border-color:var(--dshdc-danger); color:var(--dshdc-danger); }
 .dshdc-dialog button.dshdc-danger:hover:not(:disabled) { background:var(--dshdc-danger-hover); }
 .dshdc-record { display:flex; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--dshdc-border); }
 .dshdc-record-text { flex:1; min-width:0; overflow-wrap:anywhere; white-space:pre-wrap; }
 #dshdc-manager-notice { color:var(--dshdc-muted); white-space:pre-wrap; }
+#dshdc-manager { width:min(1040px, calc(100vw - 32px)); }
+.dshdc-summary { font-weight:600; }
+.dshdc-filters { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.dshdc-field { display:flex; flex-direction:column; gap:4px; min-width:0; font-size:13px; }
+.dshdc-field :is(input, select) { margin:0; }
+.dshdc-field:has(input[type="search"]) { grid-column:span 2; }
+.dshdc-dialog input[type="checkbox"] { width:24px; height:24px; min-height:24px; margin:0; accent-color:var(--dshdc-focus); cursor:pointer; flex-shrink:0; }
+.dshdc-select-target { display:flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; cursor:pointer; }
+.dshdc-record input[type="checkbox"] { outline-offset:4px; }
+.dshdc-record-text > div, .dshdc-record-text > small { display:block; color:var(--dshdc-muted); font-size:13px; }
+.dshdc-record-text > .dshdc-badges { color:var(--dshdc-text); font-weight:600; }
+.dshdc-rules { margin:16px 0; padding:12px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md,6px); }
+.dshdc-rules summary { cursor:pointer; padding:6px 0; }
+.dshdc-rules .dshdc-filters { margin-top:12px; }
+.dshdc-batch-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.dshdc-batch-tools .dshdc-field { min-width:120px; }
+.dshdc-hint, .dshdc-rules p { font-size:13px; color:var(--dshdc-muted); }
+.dshdc-preview-list { max-height:35vh; overflow:auto; overflow-wrap:anywhere; white-space:pre-wrap; border-block:1px solid var(--dshdc-border); }
+#dshdc-results { white-space:pre-wrap; overflow-wrap:anywhere; }
+#dshdc-results p { padding:12px; background:var(--dsw-alias-bg-layer-1, Field); border-radius:var(--dsw-radius-md,6px); }
+@media (max-width:600px) {
+  .dshdc-dialog { padding:16px; max-height:90vh; }
+  .dshdc-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .dshdc-record { gap:10px; }
+  .dshdc-record > button { padding:8px; }
+  #dshdc-manager > .dshdc-actions { top:-16px; }
+}
 #dshdc-notice { position:fixed; right:16px; bottom:72px; max-width:min(480px, calc(100vw - 32px));
   padding:12px 16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
@@ -467,6 +505,7 @@ function createDialog(title) {
 
 let dialogCount = 0
 let confirmation = null
+let disposeManager = null
 const pendingDeletes = new Set()
 
 function confirmDeletion(sessionId, row) {
@@ -551,7 +590,7 @@ async function askThenDelete(sessionId, btn) {
   } catch (error) {
     const msg = String((error && error.message) || error)
     btn.dataset.dshdcState = 'failed'
-    btn.title = error.name === 'AbortError' ? t('state.timeout') : `${t('state.failed')}: ${msg}`
+    btn.title = error.name === 'AbortError' ? t('state.timeout') : error.outcomeUnknown ? t('state.unknown') : `${t('state.failed')}: ${msg}`
     notify(`${btn.title}${error.partial ? `\n${t('state.partial')}` : ''}${error.backupDir ? `\n${t('manage.backup')}${error.backupDir}` : ''}`)
     return false
   } finally {
@@ -562,87 +601,17 @@ async function askThenDelete(sessionId, btn) {
 
 function openManager() {
   const existing = document.getElementById('dshdc-manager')
-  if (existing) { existing.focus?.(); return }
-  const t = currentT
-  const dialog = createDialog(t('manage.title'))
-  dialog.id = 'dshdc-manager'
-  const search = document.createElement('input')
-  search.type = 'search'
-  search.placeholder = t('manage.search')
-  search.setAttribute('aria-label', t('manage.search'))
-  const message = document.createElement('p')
-  message.id = 'dshdc-manager-notice'
-  message.setAttribute('role', 'status')
-  const records = document.createElement('div')
-  const actions = document.createElement('div')
-  actions.className = 'dshdc-actions'
-  const refresh = document.createElement('button')
-  refresh.textContent = t('manage.refresh')
-  const close = document.createElement('button')
-  close.textContent = t('manage.close')
-  actions.appendChild(refresh)
-  actions.appendChild(close)
-  for (const child of [actions, search, message, records]) dialog.appendChild(child)
-  let rows = []
-  let closed = false
-  const render = () => {
-    records.textContent = ''
-    const query = search.value?.trim().toLocaleLowerCase() || ''
-    const filtered = rows.filter((row) => `${row.title || t('manage.untitled')} ${row.workspace} ${row.id}`.toLocaleLowerCase().includes(query))
-    message.textContent = filtered.length ? t('manage.count').replace('{count}', filtered.length) : t('manage.empty')
-    for (const row of filtered) {
-      const item = document.createElement('div')
-      item.className = 'dshdc-record'
-      const label = document.createElement('div')
-      label.className = 'dshdc-record-text'
-      label.textContent = `${row.title || t('manage.untitled')}\n${row.workspace}\n${row.id}${row.running ? `\n${t('manage.running')}` : ''}${row.missing ? `\n${t('manage.missing')}` : ''}`
-      const button = document.createElement('button')
-      button.className = 'dshdc-danger'
-      button.textContent = t('btn.aria')
-      button.disabled = (row.running || (titleMap.canDetectRunning === false && !row.missing)) && titleMap.config?.allowRunning !== true
-      button.addEventListener('click', async () => {
-        if (await askThenDelete(row.id, button)) {
-          rows = rows.filter((entry) => entry.id !== row.id)
-          if (!closed) {
-            const feedback = message.textContent
-            render()
-            message.textContent = feedback
-            search.focus?.()
-          }
-        }
-      })
-      item.appendChild(label)
-      item.appendChild(button)
-      records.appendChild(item)
-    }
-  }
-  const load = async () => {
-    refresh.disabled = true
-    message.textContent = t('manage.loading')
-    try {
-      const map = await refreshSessionLists()
-      if (closed) return
-      rows = map.sessions || []
-      render()
-      if (map.canDetectRunning === false) message.textContent = t('manage.unknown')
-    } catch (error) {
-      if (!closed) message.textContent = `${t('state.failed')}: ${error.message}`
-    } finally {
-      refresh.disabled = false
-    }
-  }
-  search.addEventListener('input', render)
-  refresh.addEventListener('click', load)
-  close.addEventListener('click', () => dialog.close())
-  dialog.addEventListener('close', () => { closed = true; dialog.remove() })
-  if (typeof dialog.showModal === 'function') {
-    dialog.showModal()
-    search.focus()
-    load()
-  } else {
-    dialog.remove()
-    notify('This browser does not support dialog.')
-  }
+  if (existing) { existing.focus(); return }
+  disposeManager = showConversationManager({
+    createDialog, t: currentT, loadSessions: refreshSessionLists, deleteOne: askThenDelete,
+    request: requestJson, apiBase: API_BASE,
+    beginBatch: () => {
+      if (pendingDeletes.size || confirmation) return false
+      pendingDeletes.add('batch')
+      return true
+    },
+    endBatch: () => pendingDeletes.delete('batch'),
+  })
 }
 
 // ---------------------------------------------------------------- 诊断上报
@@ -879,6 +848,8 @@ export function apply(ctx) {
     () => () => {
       disposed = true
       confirmation?.()
+      disposeManager?.()
+      disposeManager = null
       for (const timer of retryTimers) clearTimeout(timer)
       document.removeEventListener('mouseover', onOver, true)
       document.removeEventListener('mouseout', onOut, true)

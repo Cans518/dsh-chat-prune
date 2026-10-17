@@ -4,7 +4,7 @@
 
 <h1 align="center">DSH Chat Prune</h1>
 
-<p align="center">给 DSH NEXT 加上顺手的对话删除按钮。</p>
+<p align="center">给 DSH NEXT 整理对话：先看清，再归档、保留或修剪。</p>
 
 <p align="center">
   <a href="./LICENSE">MIT 开源</a> ·
@@ -14,19 +14,22 @@
   <a href="./CONTRIBUTING.md">参与开发</a>
 </p>
 
-这是一个社区插件。在左侧会话列表中删除不再需要的对话，也可以打开“管理对话”，搜索后再删除。
+这是一个社区插件。既能从左侧会话列表删除单个对话，也能在“管理对话”中查看占用、筛选记录、批量归档和置顶，按保留规则找出值得修剪的旧会话。
 
 ## 能做什么
 
 - **直接删除**：鼠标移到会话行，点击右侧垃圾桶。
-- **搜索管理**：按标题、工作区或对话 ID 查找，支持无标题和同名对话。
+- **筛选与盘点**：按标题、工作区、会话 ID、归档/置顶/加载状态、更新时间和记录大小筛选；支持最近、最早、最大和标题排序。
+- **批量整理**：选择本页或全部筛选结果，批量归档、取消归档、置顶或取消置顶。每页显示 50 条，减少长列表卡顿。
+- **保留规则修剪**：设置“每个工作区保留最近 N 条”和“只修剪早于多少天的记录”，生成候选；始终保护置顶、已加载及时间未知的会话。
+- **先预览再执行**：批量操作显示完整目标清单、记录大小和跳过数量；逐条执行并显示成功/失败明细，可停止后续任务。
 - **确认后再删**：删除前显示目标和备份设置，避免点错。
-- **可选备份**：开启后先备份，再删除；成功时显示备份位置。
+- **可选备份**：批量删除默认勾选“删除前备份”，也可为单条删除设置全局备份；成功时显示备份位置。
 - **列表同步更新**：删除后同步更新工作区、置顶、归档和客户端会话名单，无需每删一次就重载界面。
 - **跟随 DSH 主题**：确认框、管理窗口和提示使用宿主的主题配色；切换主题时，已打开的窗口也会同步变化。
 - **保护已加载的会话**：默认拒绝删除仍被宿主使用的对话。
 
-> **删除不同于归档。** 默认不备份，确认删除后无法通过插件撤销。需要保留恢复机会时，请先[开启备份](#开启备份)。
+> **归档保留记录，删除会移除本地记录。** 单条删除默认不备份；批量删除默认勾选备份。恢复备份仍需离线手动操作。删除前请核对确认窗口中的备份策略。
 
 ## 适用环境
 
@@ -46,7 +49,7 @@ macOS / Linux 的在线删除目前未开放。Node.js 缺少 zstd 支持时，�
 在终端执行：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.3.0/dsh-chat-prune-0.3.0.tgz
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.0/dsh-chat-prune-0.4.0.tgz
 ```
 
 安装完成后重新打开 DSH。该命令会安装依赖并自动启用插件，**不需要手动编辑 `package.json` 或添加 YAML 挂载条目**。安装包已包含构建产物，不需要用户克隆源码或编译。
@@ -60,7 +63,7 @@ dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/relea
 也可以从 [Releases](https://github.com/Cans518/dsh-chat-prune/releases) 下载 `.tgz`，使用实际文件路径安装：
 
 ```powershell
-dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.3.0.tgz"
+dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.4.0.tgz"
 ```
 
 ### 从源码安装
@@ -74,7 +77,7 @@ npm ci --legacy-peer-deps
 npm run build
 npm test
 npm pack
-$pluginPackage = (Resolve-Path '.\dsh-chat-prune-0.3.0.tgz').Path
+$pluginPackage = (Resolve-Path '.\dsh-chat-prune-0.4.0.tgz').Path
 dsh plugin --profile desktop add $pluginPackage
 ```
 
@@ -91,9 +94,31 @@ dsh plugin --profile desktop add $pluginPackage
 
 ### 从“管理对话”删除
 
-点击右下角的**管理对话**，输入标题、工作区名称或对话 ID。找到目标后点击删除，再确认即可。
+点击右下角的**管理对话**。每条记录展示标题、工作区、大小、文件更新时间、会话 ID 和保护状态。可以输入标题、工作区名称或 ID，也可以组合工作区、状态、天数和大小筛选。找到目标后点击该行的删除按钮即可单独删除。
 
 同名、无标题、已归档的会话，以及记录已缺失但索引仍有残留的条目，都可以在这里查找。被宿主加载的会话会标记原因并禁止删除。
+
+### 批量归档、置顶或删除
+
+1. 先筛选目标，勾选记录，或点击“选择本页”/“选择全部筛选结果”。更改筛选会清空选择；翻页会保留选择。
+2. 在“批量操作”中选择归档、取消归档、置顶、取消置顶或删除记录。
+3. 点击“预览所选操作”，核对完整目标清单。取消不会更改记录。
+4. 确认后逐条执行。可点击“停止后续任务”，等待当前请求完成后停止；已完成的操作保留。
+5. 查看成功、失败、跳过和未执行数量，以及每条结果。失败项保留选择，修复原因后可重新预览。
+
+归档会保留记录并取消置顶；取消归档不会自动恢复置顶。归档中的会话需要先取消归档才能置顶。有活动任务的归档由宿主拒绝，插件不会强制停止任务。缺少相应宿主能力时，操作选项不可用。
+
+批量删除始终跳过置顶和已加载会话，且默认勾选备份。预览后会话更新、被置顶或被加载时，执行会拒绝对应记录并报告原因；不会自动扩大删除范围。请求超时会停止后续任务，需刷新确认结果后再重试。
+
+### 按规则修剪旧会话
+
+打开“按保留规则修剪”，设置保留数量和天数，再点击“生成修剪候选”。例如：**每个工作区保留最近 10 条，只修剪早于 30 天的记录**。
+
+候选仅来自当前筛选范围，但“最近 N 条”按整个工作区计算。置顶、已加载、记录缺失及更新时间未知的会话不会进入候选；天数使用严格早于条件。生成候选和预览都不会修改数据，之后仍需选择操作、预览并确认。确认预览前会重新计算保留规则。
+
+要清理缺失记录的残留索引，请使用“记录缺失”状态筛选并手动选择。修剪规则不会将这类条目混入旧记录。
+
+“更新时间”取会话目录内非临时文件的最新修改时间，并非最后一条消息的精确时间；大小包含会话目录中的嵌套文件，不含投影缓存或已有备份。删除时另有缓存清理，且备份会消耗空间，因此显示的记录大小不等同于实际释放空间。
 
 ## 开启备份
 
@@ -125,7 +150,7 @@ dsh plugin --profile desktop add $pluginPackage
 
 ```powershell
 dsh plugin --profile desktop remove dsh-delete-chat
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.3.0/dsh-chat-prune-0.3.0.tgz
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.0/dsh-chat-prune-0.4.0.tgz
 ```
 
 需要恢复设置时，只将 `backup`、`allowRunning`、`icon` 的值填入新插件的配置文件，保留新版的 `id` 和 `name`；不要用旧文件覆盖整个新文件。然后重新打开 DSH。已有会话和 `deleted-sessions` 备份目录不受改名影响。请勿同时启用新旧两版。

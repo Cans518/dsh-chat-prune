@@ -1,8 +1,8 @@
 /**
  * dsh-chat-prune — client 入口（构建产物，勿手改）。
  *
- * 由 scripts/build-client.mjs 从 client-core.js 生成。
- * 改逻辑请改 client-core.js，然后重跑：
+ * 由 scripts/build-client.mjs 从 pruning-policy、client-manager 和 client-core.js 生成。
+ * 改逻辑请改对应源模块，然后重跑：
  *     node scripts/build-client.mjs
  *
  * 加载方式：宿主渲染 index.html 时读 webserver 的 index injection 表，
@@ -18,9 +18,432 @@
   if (typeof document === "undefined") return;
   // 防重复注入（HMR / 路由重渲染可能多次插入同一 script）
   if (window.__dshChatPruneInstalled__) return;
-  window.__dshChatPruneBuildVersion__ = "0.3.0";
+  window.__dshChatPruneBuildVersion__ = "0.4.0";
 
 // ---------- begin client-core.js ----------
+const DAY_MS = 86400000
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 4)
+  return `${(bytes / 1024 ** unit).toFixed(1)} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][unit]}`
+}
+
+function filterSessions(rows, filters = {}, now = Date.now()) {
+  const query = (filters.query || '').trim().toLocaleLowerCase()
+  return rows.filter((row) => {
+    if (query && !`${row.title || ''} ${row.workspace || ''} ${row.id}`.toLocaleLowerCase().includes(query)) return false
+    if (filters.workspace && row.workspaceKey !== filters.workspace) return false
+    if (filters.status === 'archived' && !row.archived) return false
+    if (filters.status === 'active' && (row.archived || row.missing)) return false
+    if (filters.status === 'pinned' && !row.pinned) return false
+    if (filters.status === 'loaded' && !row.running) return false
+    if (filters.status === 'missing' && !row.missing) return false
+    if (filters.olderDays > 0 && (!(row.mtime > 0) || row.mtime >= now - filters.olderDays * DAY_MS)) return false
+    if (filters.minMiB > 0 && row.bytes < filters.minMiB * 1024 ** 2) return false
+    return true
+  }).sort((a, b) => {
+    const compared = filters.sort === 'oldest' ? a.mtime - b.mtime
+      : filters.sort === 'largest' ? b.bytes - a.bytes
+      : filters.sort === 'title' ? (a.title || '').localeCompare(b.title || '')
+      : b.mtime - a.mtime
+    return compared || a.id.localeCompare(b.id)
+  })
+}
+
+// Rank against the entire workspace before applying the current view's filters.
+// Otherwise a search could silently redefine which records count as "recent".
+function buildPrunePlan(allRows, candidates, { keepRecent = 10, olderDays = 30, now = Date.now() } = {}) {
+  if (!Number.isInteger(keepRecent) || keepRecent < 0 || !Number.isFinite(olderDays) || olderDays < 0) {
+    throw new Error('Invalid pruning rule')
+  }
+  const retained = new Set()
+  const counts = new Map()
+  for (const row of filterSessions(allRows.filter((entry) => !entry.missing), { sort: 'newest' })) {
+    const workspace = row.workspaceKey || row.workspace
+    const count = counts.get(workspace) || 0
+    if (count < keepRecent || !(row.mtime > 0)) retained.add(row.id)
+    counts.set(workspace, count + 1)
+  }
+  const selected = []
+  const skipped = { pinned: 0, loaded: 0, missing: 0, recent: 0, age: 0 }
+  for (const row of candidates) {
+    const reason = row.missing ? 'missing' : row.running ? 'loaded' : row.pinned ? 'pinned'
+      : retained.has(row.id) ? 'recent'
+      : !(row.mtime > 0) || row.mtime >= now - olderDays * DAY_MS ? 'age' : null
+    if (reason) skipped[reason] += 1
+    else selected.push(row)
+  }
+  return { sessions: selected, skipped, bytes: selected.reduce((sum, row) => sum + row.bytes, 0) }
+}
+
+
+function showConversationManager(services) {
+  const { createDialog, t, loadSessions, deleteOne, request, apiBase, beginBatch, endBatch } = services
+  const existing = document.getElementById('dshdc-manager')
+  if (existing) { existing.focus(); return }
+  const english = t('manage.close') === 'Close'
+  const text = (zh, en) => english ? en : zh
+  const dialog = createDialog(t('manage.title'))
+  dialog.id = 'dshdc-manager'
+  const node = (tag, content, className) => {
+    const element = document.createElement(tag)
+    if (content !== undefined) element.textContent = content
+    if (className) element.className = className
+    return element
+  }
+  const button = (label, listener, className) => {
+    const element = node('button', label, className)
+    element.type = 'button'
+    element.addEventListener('click', listener)
+    return element
+  }
+  const field = (label, control, parent) => {
+    const wrapper = node('label', undefined, 'dshdc-field')
+    control.setAttribute('aria-label', label)
+    wrapper.append(node('span', label), control)
+    parent.append(wrapper)
+    return control
+  }
+  const select = (label, options, parent) => {
+    const element = node('select')
+    for (const [value, caption] of options) {
+      const option = node('option', caption)
+      option.value = value
+      element.append(option)
+    }
+    return field(label, element, parent)
+  }
+  const number = (label, value, parent) => {
+    const element = node('input')
+    element.type = 'number'
+    element.min = '0'
+    element.step = '1'
+    element.value = value
+    return field(label, element, parent)
+  }
+  let rows = [], map = {}, selected = new Set(), page = 0, closed = false, busy = false, stopped = false, retention = null
+  let cancelPreview = null
+  const pageSize = 50
+  const actions = node('div', undefined, 'dshdc-actions')
+  const refresh = button(t('manage.refresh'), () => load())
+  const close = button(t('manage.close'), () => dialog.close())
+  actions.append(dialog.querySelector('h2'), refresh, close)
+  const stats = node('p', undefined, 'dshdc-summary')
+  const filters = node('div', undefined, 'dshdc-filters')
+  const search = node('input')
+  search.type = 'search'
+  search.placeholder = t('manage.search')
+  field(t('manage.search'), search, filters)
+  const workspace = select(text('工作区', 'Workspace'), [['', text('全部工作区', 'All workspaces')]], filters)
+  const status = select(text('状态', 'Status'), [
+    ['', text('全部状态', 'All statuses')], ['active', text('未归档', 'Unarchived')],
+    ['archived', text('已归档', 'Archived')], ['pinned', text('已置顶', 'Pinned')],
+    ['loaded', t('manage.running')], ['missing', text('记录缺失', 'Missing records')],
+  ], filters)
+  const sort = select(text('排序', 'Sort'), [
+    ['newest', text('最近更新', 'Newest first')], ['oldest', text('最早更新', 'Oldest first')],
+    ['largest', text('占用最大', 'Largest first')], ['title', text('标题', 'Title')],
+  ], filters)
+  const older = number(text('距今至少多少天', 'At least days old'), 0, filters)
+  const minimum = number(text('至少占用 MiB', 'Minimum MiB'), 0, filters)
+  const rules = node('details', undefined, 'dshdc-rules')
+  rules.append(node('summary', text('按保留规则修剪', 'Prune with retention rules')))
+  const ruleFields = node('div', undefined, 'dshdc-filters')
+  const keep = number(text('每个工作区保留最近条数', 'Keep newest per workspace'), 10, ruleFields)
+  const days = number(text('只修剪早于多少天的记录', 'Only prune records older than days'), 30, ruleFields)
+  const ruleHint = node('p', text(
+    '在当前筛选范围内生成候选，保留条数按整个工作区计算。始终排除置顶、已加载、记录缺失及时间未知的会话。预览不会修改数据。',
+    'Generate candidates within these filters; retention counts the whole workspace. Pinned, loaded, missing and unknown-date records are protected. Preview changes no data.'))
+  const prune = button(text('生成修剪候选', 'Generate pruning candidates'), () => {
+    if (!keep.checkValidity() || !days.checkValidity()) { keep.reportValidity(); days.reportValidity(); return }
+    retention = { keepRecent: Number(keep.value), olderDays: Number(days.value) }
+    const plan = buildPrunePlan(rows, filtered(), retention)
+    selected = new Set(plan.sessions.map((row) => row.id))
+    page = 0
+    render()
+    message.textContent = text(
+      `候选 ${selected.size} 条，记录约 ${formatBytes(plan.bytes)}；保护置顶 ${plan.skipped.pinned}、已加载 ${plan.skipped.loaded}、缺失 ${plan.skipped.missing}、最近保留 ${plan.skipped.recent}、未达时间条件 ${plan.skipped.age}。请核对后预览操作。`,
+      `${selected.size} candidates, about ${formatBytes(plan.bytes)}. Protected: ${plan.skipped.pinned} pinned, ${plan.skipped.loaded} loaded, ${plan.skipped.missing} missing, ${plan.skipped.recent} retained, ${plan.skipped.age} too recent. Review before proceeding.`)
+  })
+  rules.append(ruleFields, ruleHint, prune)
+  const toolbar = node('div', undefined, 'dshdc-batch-tools')
+  const selectPage = button(text('选择本页', 'Select page'), () => {
+    retention = null
+    for (const row of filtered().slice(page * pageSize, (page + 1) * pageSize)) selected.add(row.id)
+    render()
+  })
+  const selectAll = button(text('选择全部筛选结果', 'Select all filtered'), () => {
+    retention = null
+    selected = new Set(filtered().map((row) => row.id)); render()
+  })
+  const clear = button(text('清空选择', 'Clear selection'), () => { selected.clear(); retention = null; render() })
+  const selectedCount = node('span')
+  toolbar.append(selectPage, selectAll, clear, selectedCount)
+  const operations = node('div', undefined, 'dshdc-batch-tools')
+  const operation = select(text('批量操作', 'Batch action'), [
+    ['archive', text('归档', 'Archive')], ['unarchive', text('取消归档', 'Unarchive')],
+    ['pin', text('置顶', 'Pin')], ['unpin', text('取消置顶', 'Unpin')],
+    ['delete', text('删除记录', 'Delete records')],
+  ], operations)
+  const backup = node('input')
+  backup.type = 'checkbox'
+  backup.checked = true
+  const backupField = field(text('删除前备份', 'Back up before deleting'), backup, operations)
+  const preview = button(text('预览所选操作', 'Preview selected action'), () => previewBatch())
+  const stop = button(text('停止后续任务', 'Stop remaining tasks'), () => {
+    stopped = true; stop.disabled = true
+    message.textContent = text('正在等待当前请求完成，之后停止。', 'Waiting for the current request, then stopping.')
+  })
+  stop.hidden = true
+  operations.append(preview, stop)
+  const hint = node('p', text(
+    '更改筛选会清空选择。批量删除始终跳过置顶和已加载会话。归档保留记录但会取消置顶；取消归档不会恢复置顶。',
+    'Changing filters clears selection. Batch deletion always skips pinned and loaded sessions. Archiving keeps records and removes pins; unarchiving does not restore pins.'), 'dshdc-hint')
+  const message = node('p')
+  message.id = 'dshdc-manager-notice'
+  message.setAttribute('role', 'status')
+  message.setAttribute('aria-live', 'polite')
+  const records = node('div')
+  const pagination = node('div', undefined, 'dshdc-batch-tools')
+  const previous = button(text('上一页', 'Previous'), () => { page--; render() })
+  const next = button(text('下一页', 'Next'), () => { page++; render() })
+  const pageCaption = node('span')
+  pagination.append(previous, pageCaption, next)
+  const results = node('div')
+  results.id = 'dshdc-results'
+  results.tabIndex = -1
+  dialog.append(actions, stats, filters, rules, toolbar, operations, hint, message, records, pagination, results)
+
+  function filtered() {
+    return filterSessions(rows.map((row) => ({ ...row, title: row.title || t('manage.untitled') })), {
+      query: search.value, workspace: workspace.value, status: status.value,
+      sort: sort.value, olderDays: Number(older.value), minMiB: Number(minimum.value),
+    })
+  }
+
+  function render() {
+    const visible = filtered()
+    const pages = Math.max(1, Math.ceil(visible.length / pageSize))
+    page = Math.max(0, Math.min(page, pages - 1))
+    stats.textContent = text(
+      `${rows.length} 个对话 · 记录约 ${formatBytes(rows.reduce((sum, row) => sum + row.bytes, 0))} · 已归档 ${rows.filter((row) => row.archived).length} · 已置顶 ${rows.filter((row) => row.pinned).length}`,
+      `${rows.length} conversations · about ${formatBytes(rows.reduce((sum, row) => sum + row.bytes, 0))} · ${rows.filter((row) => row.archived).length} archived · ${rows.filter((row) => row.pinned).length} pinned`)
+    selectedCount.textContent = text(`筛选 ${visible.length} · 已选 ${selected.size}`, `${visible.length} filtered · ${selected.size} selected`)
+    records.replaceChildren()
+    for (const row of visible.slice(page * pageSize, (page + 1) * pageSize)) {
+      const item = node('div', undefined, 'dshdc-record')
+      item.dataset.sessionId = row.id
+      const checkbox = node('input')
+      checkbox.type = 'checkbox'
+      checkbox.checked = selected.has(row.id)
+      checkbox.disabled = busy
+      checkbox.setAttribute('aria-label', text(`选择 ${row.title}`, `Select ${row.title}`))
+      checkbox.addEventListener('change', () => {
+        retention = null
+        if (checkbox.checked) selected.add(row.id)
+        else selected.delete(row.id)
+        selectedCount.textContent = text(`筛选 ${visible.length} · 已选 ${selected.size}`, `${visible.length} filtered · ${selected.size} selected`)
+        preview.disabled = selected.size === 0 || map.managementVersion !== 1
+      })
+      const selectionTarget = node('label', undefined, 'dshdc-select-target')
+      selectionTarget.append(checkbox)
+      const label = node('div', undefined, 'dshdc-record-text')
+      const date = row.mtime > 0 ? new Date(row.mtime).toLocaleString() : text('更新时间未知', 'Unknown update time')
+      label.append(node('strong', row.title), node('div', `${row.workspace} · ${formatBytes(row.bytes)} · ${date}`),
+        node('small', row.id))
+      const badges = [
+        row.archived && text('已归档', 'Archived'), row.pinned && text('已置顶', 'Pinned'),
+        row.running && t('manage.running'), row.missing && t('manage.missing'),
+      ].filter(Boolean)
+      if (badges.length) label.append(node('div', badges.join(' · '), 'dshdc-badges'))
+      const remove = button(t('btn.aria'), async () => {
+        if (await deleteOne(row.id, remove)) {
+          rows = rows.filter((entry) => entry.id !== row.id)
+          selected.delete(row.id)
+          if (!closed) { const feedback = message.textContent; render(); message.textContent = feedback; search.focus() }
+        }
+      }, 'dshdc-danger')
+      remove.disabled = busy || ((row.running || (map.canDetectRunning === false && !row.missing)) && map.config?.allowRunning !== true)
+      item.append(selectionTarget, label, remove)
+      records.append(item)
+    }
+    if (!visible.length) records.append(node('p', t('manage.empty')))
+    pageCaption.textContent = `${page + 1} / ${pages}`
+    previous.disabled = busy || page === 0
+    next.disabled = busy || page + 1 === pages
+    preview.disabled = busy || selected.size === 0 || map.managementVersion !== 1
+    for (const option of operation.options) option.disabled = option.value !== 'delete' && !map.actions?.includes(option.value)
+    if (operation.selectedOptions[0]?.disabled) operation.value = 'delete'
+    backup.disabled = busy || map.config?.backup === true
+    if (map.config?.backup === true) backup.checked = true
+    backupField.parentElement.hidden = operation.value !== 'delete'
+  }
+
+  async function load() {
+    refresh.disabled = true
+    message.textContent = t('manage.loading')
+    try {
+      map = await loadSessions()
+      if (closed) return
+      rows = map.sessions || []
+      selected = new Set([...selected].filter((id) => rows.some((row) => row.id === id)))
+      const oldWorkspace = workspace.value
+      workspace.replaceChildren()
+      const choices = new Map([['', text('全部工作区', 'All workspaces')]])
+      for (const row of rows) choices.set(row.workspaceKey, row.workspace)
+      for (const [value, caption] of choices) {
+        const option = node('option', caption); option.value = value; workspace.append(option)
+      }
+      workspace.value = choices.has(oldWorkspace) ? oldWorkspace : ''
+      const visibleIds = new Set(filtered().map((row) => row.id))
+      selected = new Set([...selected].filter((id) => visibleIds.has(id)))
+      render()
+      message.textContent = map.managementVersion !== 1 ? t('state.hostOutdated')
+        : map.canDetectRunning === false ? t('manage.unknown') : ''
+    } catch (error) {
+      if (!closed) message.textContent = `${t('state.failed')}: ${error.message}`
+    } finally {
+      refresh.disabled = busy
+    }
+  }
+
+  async function previewBatch() {
+    if (busy || !selected.size || !beginBatch()) return
+    busy = true
+    stopped = false
+    setBusyControls()
+    try {
+      map = await loadSessions()
+      rows = map.sessions || []
+      if (closed || stopped) return
+      if (map.managementVersion !== 1) throw new Error(t('state.hostOutdated'))
+      const action = operation.value
+      const targets = (retention ? buildPrunePlan(rows, filtered(), retention).sessions : filtered())
+        .filter((row) => selected.has(row.id))
+      const eligible = targets.filter((row) => action !== 'delete' ||
+        (!row.pinned && !row.running && (row.missing || map.canDetectRunning !== false)))
+      const skipped = selected.size - eligible.length
+      if (!eligible.length) {
+        message.textContent = text('所选会话均已消失或受到保护，没有可执行目标。', 'All selected records are gone or protected; nothing to execute.')
+        return
+      }
+      const label = operation.selectedOptions[0].textContent
+      const useBackup = backup.checked || map.config?.backup === true
+      if (!await confirmBatch(eligible, { action, label, skipped, useBackup })) return
+      stop.hidden = false
+      stop.disabled = false
+      results.replaceChildren()
+      const outcomes = []
+      for (const row of eligible) {
+        if (stopped || closed || !dialog.isConnected) break
+        message.textContent = text(`处理中 ${outcomes.length + 1} / ${eligible.length}：${row.title || row.id}`, `Processing ${outcomes.length + 1} / ${eligible.length}: ${row.title || row.id}`)
+        try {
+          const response = await request(`${apiBase}/sessions${action === 'delete' ? '' : '/action'}`, {
+            method: action === 'delete' ? 'DELETE' : 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(action === 'delete'
+              ? { sessionId: row.id, backup: useBackup, protectPinned: true, expectedMtime: row.mtime, expectedRevision: row.revision }
+              : { sessionId: row.id, action }),
+          })
+          outcomes.push({ row, state: 'success', detail: response.backupDir ? `${t('manage.backup')}${response.backupDir}` : '' })
+          selected.delete(row.id)
+        } catch (error) {
+          const unknown = error.outcomeUnknown === true || error.name === 'AbortError'
+          outcomes.push({ row, state: unknown ? 'unknown' : 'failed', detail: [
+            error.name === 'AbortError' ? t('state.timeout') : unknown ? t('state.unknown') : error.message,
+            error.partial && t('state.partial'), error.backupDir && `${t('manage.backup')}${error.backupDir}`,
+          ].filter(Boolean).join('\n') })
+          // A lost response cannot establish whether the mutation committed.
+          if (unknown) stopped = true
+        }
+      }
+      const successful = outcomes.filter((entry) => entry.state === 'success').length
+      const failed = outcomes.filter((entry) => entry.state === 'failed').length
+      const unknown = outcomes.filter((entry) => entry.state === 'unknown').length
+      const unfinished = eligible.length - outcomes.length
+      for (const outcome of outcomes) {
+        const state = outcome.state === 'success' ? text('成功', 'Succeeded')
+          : outcome.state === 'unknown' ? text('结果未知', 'Outcome unknown') : text('失败', 'Failed')
+        results.append(node('p', `${state} · ${outcome.row.title || outcome.row.id}\n${outcome.row.id}${outcome.detail ? `\n${outcome.detail}` : ''}`))
+      }
+      const summary = text(
+        `${label}完成：成功 ${successful}，失败 ${failed}，跳过 ${skipped}，未执行 ${unfinished}${unknown ? `，结果未知 ${unknown}` : ''}。`,
+        `${label}: ${successful} succeeded, ${failed} failed, ${skipped} skipped, ${unfinished} not started${unknown ? `, ${unknown} unknown` : ''}.`)
+      if (!closed && dialog.isConnected) {
+        await load()
+        message.textContent = `${summary}${message.textContent ? `\n${message.textContent}` : ''}`
+        results.focus()
+      }
+    } catch (error) {
+      if (!closed) message.textContent = `${t('state.failed')}: ${error.message}`
+    } finally {
+      busy = false
+      endBatch()
+      if (!closed) { stop.hidden = true; setBusyControls(); render() }
+    }
+  }
+
+  function confirmBatch(targets, { action, label, skipped, useBackup }) {
+    const previewDialog = createDialog(text('批量操作预览', 'Batch preview'))
+    previewDialog.id = 'dshdc-batch-preview'
+    const bytes = targets.reduce((sum, row) => sum + row.bytes, 0)
+    previewDialog.append(node('p', text(
+      `${label} ${targets.length} 条，记录约 ${formatBytes(bytes)}；跳过 ${skipped} 条。`,
+      `${label} ${targets.length} records, about ${formatBytes(bytes)}; ${skipped} skipped.`)))
+    if (action === 'delete') previewDialog.append(node('p', useBackup
+      ? text('已开启备份。备份会占用磁盘，本次释放空间可能少于记录大小；恢复仍需离线手动操作。', 'Backup is enabled and uses disk space; reclaimed space may be smaller. Restoration is manual and offline.')
+      : text('未开启备份。删除本地记录后无法通过插件撤销。', 'Backup is off. Deleted local records cannot be undone through this plugin.')))
+    const list = node('div', undefined, 'dshdc-preview-list')
+    for (const row of targets) list.append(node('p', `${row.title || t('manage.untitled')}\n${row.workspace} · ${row.id}`))
+    previewDialog.append(list)
+    const controls = node('div', undefined, 'dshdc-actions')
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (answer) => {
+        if (settled) return
+        settled = true; cancelPreview = null; previewDialog.close(); previewDialog.remove(); resolve(answer)
+      }
+      cancelPreview = () => finish(false)
+      const cancel = button(t('manage.cancel'), () => finish(false))
+      const proceed = button(text(`确认${label}`, `Confirm ${label}`), () => finish(true), action === 'delete' ? 'dshdc-danger' : '')
+      controls.append(cancel, proceed)
+      previewDialog.append(controls)
+      previewDialog.addEventListener('cancel', (event) => { event.preventDefault(); finish(false) })
+      previewDialog.addEventListener('close', () => finish(false))
+      previewDialog.showModal()
+      cancel.focus()
+    })
+  }
+
+  function setBusyControls() {
+    for (const element of dialog.querySelectorAll('input, select, button')) element.disabled = busy
+    stop.disabled = false
+  }
+  for (const element of filters.querySelectorAll('input, select')) {
+    element.addEventListener(element === search ? 'input' : 'change', () => {
+      selected.clear(); retention = null; page = 0; render()
+    })
+  }
+  operation.addEventListener('change', render)
+  dialog.addEventListener('cancel', (event) => {
+    if (busy) { event.preventDefault(); stopped = true; message.textContent = text('当前请求完成后停止。', 'Stopping after the current request.') }
+  })
+  dialog.addEventListener('close', () => { closed = true; stopped = true; dialog.remove() })
+  if (typeof dialog.showModal !== 'function') { dialog.remove(); return }
+  dialog.showModal()
+  search.focus()
+  load()
+  return () => {
+    closed = true
+    stopped = true
+    cancelPreview?.()
+    dialog.close()
+    dialog.remove()
+  }
+}
+
 /**
  * dsh-chat-prune — client half.
  *
@@ -42,6 +465,7 @@
  * 空闲时零成本。
  * ─────────────────────────────────────────────────────────────
  */
+
 
 const name = 'dsh-chat-prune'
 
@@ -68,6 +492,7 @@ const zh = {
   'state.running': '正在运行中，已拒绝删除',
   'state.hostOutdated': '宿主仍在运行旧版删除插件。请正常退出 DSH 后重新打开，再尝试删除。',
   'state.timeout': '请求超时，结果尚未确认。请刷新列表检查后再重试。',
+  'state.unknown': '未收到有效响应，结果尚未确认。请刷新列表检查后再重试。',
   'state.refreshFailed': '删除已完成，但列表刷新失败。请点击刷新列表。',
   'state.partial': '删除可能已部分完成。请修复上述错误后重试以清理残留索引。',
   'manage.title': '管理对话',
@@ -100,6 +525,7 @@ const en = {
   'state.running': 'Session is running; deletion refused',
   'state.hostOutdated': 'The host still runs the old deletion plugin. Quit DSH normally and reopen it before deleting.',
   'state.timeout': 'Request timed out; the result is unknown. Refresh the list before retrying.',
+  'state.unknown': 'No valid response was received; the result is unknown. Refresh before retrying.',
   'state.refreshFailed': 'Deletion completed, but refreshing failed. Refresh the list to check.',
   'state.partial': 'Deletion may have partly completed. Fix the error and retry to clean up remaining entries.',
   'manage.title': 'Manage conversations',
@@ -193,11 +619,15 @@ async function requestJson(url, init = {}) {
     if (!response.ok || data?.ok !== true) {
       const error = new Error(data?.error || `${response.status} ${response.statusText || ''}`)
       error.status = response.status
+      error.definitive = true
       error.partial = data?.partial
       error.backupDir = data?.backupDir
       throw error
     }
     return data
+  } catch (error) {
+    if (!error.definitive) error.outcomeUnknown = true
+    throw error
   } finally {
     clearTimeout(timer)
   }
@@ -223,7 +653,8 @@ async function refreshTitleMap(force = false) {
       byTitle.set(key, byTitle.has(key) ? null : row.id)
     }
     titleMap = { byTitle, fetchedAt: now, sessions: rows, config: data.config || {},
-      canDetectRunning: data.canDetectRunning, hostVersion: data.version }
+      canDetectRunning: data.canDetectRunning, hostVersion: data.version, actions: data.actions || [],
+      managementVersion: data.managementVersion }
     return titleMap
   })()
   try {
@@ -404,10 +835,11 @@ function ensureLayer() {
   max-height:80vh; padding:24px; border:0; border-radius:var(--dsw-radius-panel, 12px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
   box-shadow:var(--dsw-elevation-prominent, 0 0 0 1px var(--dshdc-border), 0 16px 48px #0003);
-  font:inherit; font-family:var(--dsw-font-family, inherit); line-height:1.5; overflow:auto; pointer-events:auto; }
+  font:inherit; font-family:var(--dsw-font-family, system-ui, sans-serif); line-height:1.5; overflow:auto; pointer-events:auto; }
 .dshdc-dialog::backdrop { background:var(--dsw-alias-bg-mask-1, #0008); backdrop-filter:var(--dsw-mask-blur, none); }
 .dshdc-dialog h2 { font-size:20px; margin:0 0 16px; }
-.dshdc-dialog input { box-sizing:border-box; width:100%; min-height:44px; padding:8px; margin:12px 0; font:inherit;
+.dshdc-dialog [hidden] { display:none !important; }
+.dshdc-dialog :is(input, select) { box-sizing:border-box; width:100%; min-height:44px; padding:8px; margin:12px 0; font:inherit;
   border:1px solid var(--dsw-alias-border-l4, var(--dshdc-border)); border-radius:var(--dsw-radius-md, 6px);
   background:var(--dsw-alias-bg-layer-1, Field); color:var(--dshdc-text); caret-color:var(--dshdc-focus); }
 .dshdc-dialog input::placeholder { color:var(--dsw-alias-label-tertiary, var(--dshdc-muted)); }
@@ -417,16 +849,44 @@ function ensureLayer() {
 .dshdc-dialog button:hover:not(:disabled) { background:var(--dshdc-hover); }
 .dshdc-dialog button:active:not(:disabled) { background:var(--dshdc-active); }
 .dshdc-dialog button:disabled { opacity:.55; cursor:wait; }
-.dshdc-dialog :is(button, input):focus-visible, #dshdc-manage:focus-visible {
+.dshdc-dialog :is(button, input, select, summary):focus-visible, #dshdc-manage:focus-visible {
   outline:var(--dsw-focus-ring-width, 2px) solid var(--dshdc-focus); outline-offset:2px; }
 .dshdc-actions { display:flex; justify-content:flex-end; gap:12px; flex-wrap:wrap; margin-top:20px; }
 #dshdc-manager > .dshdc-actions { position:sticky; top:-24px; padding:12px 0;
   background:var(--dshdc-surface); z-index:1; margin-top:0; }
+#dshdc-manager > .dshdc-actions h2 { margin:0 auto 0 0; align-self:center; }
 .dshdc-dialog button.dshdc-danger { border-color:var(--dshdc-danger); color:var(--dshdc-danger); }
 .dshdc-dialog button.dshdc-danger:hover:not(:disabled) { background:var(--dshdc-danger-hover); }
 .dshdc-record { display:flex; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--dshdc-border); }
 .dshdc-record-text { flex:1; min-width:0; overflow-wrap:anywhere; white-space:pre-wrap; }
 #dshdc-manager-notice { color:var(--dshdc-muted); white-space:pre-wrap; }
+#dshdc-manager { width:min(1040px, calc(100vw - 32px)); }
+.dshdc-summary { font-weight:600; }
+.dshdc-filters { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.dshdc-field { display:flex; flex-direction:column; gap:4px; min-width:0; font-size:13px; }
+.dshdc-field :is(input, select) { margin:0; }
+.dshdc-field:has(input[type="search"]) { grid-column:span 2; }
+.dshdc-dialog input[type="checkbox"] { width:24px; height:24px; min-height:24px; margin:0; accent-color:var(--dshdc-focus); cursor:pointer; flex-shrink:0; }
+.dshdc-select-target { display:flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; cursor:pointer; }
+.dshdc-record input[type="checkbox"] { outline-offset:4px; }
+.dshdc-record-text > div, .dshdc-record-text > small { display:block; color:var(--dshdc-muted); font-size:13px; }
+.dshdc-record-text > .dshdc-badges { color:var(--dshdc-text); font-weight:600; }
+.dshdc-rules { margin:16px 0; padding:12px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md,6px); }
+.dshdc-rules summary { cursor:pointer; padding:6px 0; }
+.dshdc-rules .dshdc-filters { margin-top:12px; }
+.dshdc-batch-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.dshdc-batch-tools .dshdc-field { min-width:120px; }
+.dshdc-hint, .dshdc-rules p { font-size:13px; color:var(--dshdc-muted); }
+.dshdc-preview-list { max-height:35vh; overflow:auto; overflow-wrap:anywhere; white-space:pre-wrap; border-block:1px solid var(--dshdc-border); }
+#dshdc-results { white-space:pre-wrap; overflow-wrap:anywhere; }
+#dshdc-results p { padding:12px; background:var(--dsw-alias-bg-layer-1, Field); border-radius:var(--dsw-radius-md,6px); }
+@media (max-width:600px) {
+  .dshdc-dialog { padding:16px; max-height:90vh; }
+  .dshdc-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .dshdc-record { gap:10px; }
+  .dshdc-record > button { padding:8px; }
+  #dshdc-manager > .dshdc-actions { top:-16px; }
+}
 #dshdc-notice { position:fixed; right:16px; bottom:72px; max-width:min(480px, calc(100vw - 32px));
   padding:12px 16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
@@ -490,6 +950,7 @@ function createDialog(title) {
 
 let dialogCount = 0
 let confirmation = null
+let disposeManager = null
 const pendingDeletes = new Set()
 
 function confirmDeletion(sessionId, row) {
@@ -574,7 +1035,7 @@ async function askThenDelete(sessionId, btn) {
   } catch (error) {
     const msg = String((error && error.message) || error)
     btn.dataset.dshdcState = 'failed'
-    btn.title = error.name === 'AbortError' ? t('state.timeout') : `${t('state.failed')}: ${msg}`
+    btn.title = error.name === 'AbortError' ? t('state.timeout') : error.outcomeUnknown ? t('state.unknown') : `${t('state.failed')}: ${msg}`
     notify(`${btn.title}${error.partial ? `\n${t('state.partial')}` : ''}${error.backupDir ? `\n${t('manage.backup')}${error.backupDir}` : ''}`)
     return false
   } finally {
@@ -585,87 +1046,17 @@ async function askThenDelete(sessionId, btn) {
 
 function openManager() {
   const existing = document.getElementById('dshdc-manager')
-  if (existing) { existing.focus?.(); return }
-  const t = currentT
-  const dialog = createDialog(t('manage.title'))
-  dialog.id = 'dshdc-manager'
-  const search = document.createElement('input')
-  search.type = 'search'
-  search.placeholder = t('manage.search')
-  search.setAttribute('aria-label', t('manage.search'))
-  const message = document.createElement('p')
-  message.id = 'dshdc-manager-notice'
-  message.setAttribute('role', 'status')
-  const records = document.createElement('div')
-  const actions = document.createElement('div')
-  actions.className = 'dshdc-actions'
-  const refresh = document.createElement('button')
-  refresh.textContent = t('manage.refresh')
-  const close = document.createElement('button')
-  close.textContent = t('manage.close')
-  actions.appendChild(refresh)
-  actions.appendChild(close)
-  for (const child of [actions, search, message, records]) dialog.appendChild(child)
-  let rows = []
-  let closed = false
-  const render = () => {
-    records.textContent = ''
-    const query = search.value?.trim().toLocaleLowerCase() || ''
-    const filtered = rows.filter((row) => `${row.title || t('manage.untitled')} ${row.workspace} ${row.id}`.toLocaleLowerCase().includes(query))
-    message.textContent = filtered.length ? t('manage.count').replace('{count}', filtered.length) : t('manage.empty')
-    for (const row of filtered) {
-      const item = document.createElement('div')
-      item.className = 'dshdc-record'
-      const label = document.createElement('div')
-      label.className = 'dshdc-record-text'
-      label.textContent = `${row.title || t('manage.untitled')}\n${row.workspace}\n${row.id}${row.running ? `\n${t('manage.running')}` : ''}${row.missing ? `\n${t('manage.missing')}` : ''}`
-      const button = document.createElement('button')
-      button.className = 'dshdc-danger'
-      button.textContent = t('btn.aria')
-      button.disabled = (row.running || (titleMap.canDetectRunning === false && !row.missing)) && titleMap.config?.allowRunning !== true
-      button.addEventListener('click', async () => {
-        if (await askThenDelete(row.id, button)) {
-          rows = rows.filter((entry) => entry.id !== row.id)
-          if (!closed) {
-            const feedback = message.textContent
-            render()
-            message.textContent = feedback
-            search.focus?.()
-          }
-        }
-      })
-      item.appendChild(label)
-      item.appendChild(button)
-      records.appendChild(item)
-    }
-  }
-  const load = async () => {
-    refresh.disabled = true
-    message.textContent = t('manage.loading')
-    try {
-      const map = await refreshSessionLists()
-      if (closed) return
-      rows = map.sessions || []
-      render()
-      if (map.canDetectRunning === false) message.textContent = t('manage.unknown')
-    } catch (error) {
-      if (!closed) message.textContent = `${t('state.failed')}: ${error.message}`
-    } finally {
-      refresh.disabled = false
-    }
-  }
-  search.addEventListener('input', render)
-  refresh.addEventListener('click', load)
-  close.addEventListener('click', () => dialog.close())
-  dialog.addEventListener('close', () => { closed = true; dialog.remove() })
-  if (typeof dialog.showModal === 'function') {
-    dialog.showModal()
-    search.focus()
-    load()
-  } else {
-    dialog.remove()
-    notify('This browser does not support dialog.')
-  }
+  if (existing) { existing.focus(); return }
+  disposeManager = showConversationManager({
+    createDialog, t: currentT, loadSessions: refreshSessionLists, deleteOne: askThenDelete,
+    request: requestJson, apiBase: API_BASE,
+    beginBatch: () => {
+      if (pendingDeletes.size || confirmation) return false
+      pendingDeletes.add('batch')
+      return true
+    },
+    endBatch: () => pendingDeletes.delete('batch'),
+  })
 }
 
 // ---------------------------------------------------------------- 诊断上报
@@ -902,6 +1293,8 @@ function apply(ctx) {
     () => () => {
       disposed = true
       confirmation?.()
+      disposeManager?.()
+      disposeManager = null
       for (const timer of retryTimers) clearTimeout(timer)
       document.removeEventListener('mouseover', onOver, true)
       document.removeEventListener('mouseout', onOut, true)

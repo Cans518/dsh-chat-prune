@@ -1,5 +1,5 @@
 /**
- * 把 client-core.js（可单测的 ESM）打成 client.js（浏览器直接执行的自包含脚本）。
+ * 将筛选规则、管理窗口和 client-core.js 打成浏览器直接执行的自包含 client.js。
  *
  * 为什么需要这一步：
  *   client-core.js 是 ESM（export 函数），便于 node 单测；
@@ -8,7 +8,7 @@
  *   不经过任何打包器，也不经过 __ModuleLoader__。
  *
  * 做法：
- *   1. 读 client-core.js
+ *   1. 按依赖顺序读取规则、管理窗口和 client-core.js
  *   2. 剥掉 ESM 语法（export 标记 → 普通声明；去掉 import 行）
  *   3. 包进一个 IIFE：定义完就地用最小 ctx 替身启动
  *
@@ -24,7 +24,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
 
-const src = readFileSync(join(root, 'client-core.js'), 'utf8')
+const src = ['lib/pruning-policy.js', 'client-manager.js', 'client-core.js']
+  .map((file) => readFileSync(join(root, file), 'utf8')).join('\n')
 
 /** 剥掉 ESM 语法，保留缩进结构。 */
 function stripEsm(code) {
@@ -70,8 +71,8 @@ const bodyNoTest = bodyNoCjs.replace(
 const output = `/**
  * dsh-chat-prune — client 入口（构建产物，勿手改）。
  *
- * 由 scripts/build-client.mjs 从 client-core.js 生成。
- * 改逻辑请改 client-core.js，然后重跑：
+ * 由 scripts/build-client.mjs 从 pruning-policy、client-manager 和 client-core.js 生成。
+ * 改逻辑请改对应源模块，然后重跑：
  *     node scripts/build-client.mjs
  *
  * 加载方式：宿主渲染 index.html 时读 webserver 的 index injection 表，

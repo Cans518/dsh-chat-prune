@@ -1,7 +1,7 @@
 {
   "name": "dsh-chat-prune",
-  "version": "0.3.0",
-  "description": "DSH conversation deletion with confirmation, optional backups and a searchable manager.",
+  "version": "0.4.0",
+  "description": "DSH conversation management with retention previews, batch archive and pin actions, and guarded deletion.",
   "author": "Cans518",
   "repository": {
     "type": "git",
@@ -28,7 +28,7 @@
     "build": "node scripts/build-client.mjs",
     "test": "node test/all.mjs",
     "test:installed": "node test/all.mjs --installed",
-    "test:browser": "node scripts/build-client.mjs && node test/browser-e2e.mjs",
+    "test:browser": "node scripts/build-client.mjs && node test/browser-e2e.mjs && node test/manager-e2e.mjs",
     "test:host": "node scripts/build-client.mjs && node test/host-e2e.mjs",
     "test:install": "npm run build && npm pack --ignore-scripts && node test/install-e2e.mjs",
     "prepack": "node scripts/build-client.mjs"
@@ -63,6 +63,7 @@
     "lib",
     "client.js",
     "client-core.js",
+    "client-manager.js",
     "client-slot.js",
     "cordis.patch.yml",
     "assets",

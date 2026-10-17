@@ -12,14 +12,14 @@ npm run build
 npm test
 ```
 
-修改 `client-core.js` 后需要运行 `npm run build`，并一同提交生成的 `client.js`。`client-slot.js` 是单独的宿主模块，不由该脚本生成。
+修改 `client-core.js`、`client-manager.js` 或 `lib/pruning-policy.js` 后需要运行 `npm run build`，并一同提交生成的 `client.js`。构建会按依赖顺序将这些模块内联为普通脚本。`client-slot.js` 是单独的宿主模块，不由该脚本生成。
 
 ## 测试
 
 | 命令 | 验证范围 |
 |---|---|
 | `npm test` | 当前源码的逻辑、客户端状态、导出、删除安全和日志解析；不读取真实用户 home |
-| `npm run test:browser` | Chromium 交互、真实 HTTP 和临时会话目录 |
+| `npm run test:browser` | Chromium 单条及批量交互、真实 HTTP、保留规则、停止任务、临时会话目录 |
 | `npm run test:installed` | 本机已安装插件的配置、代码一致性及宿主集成；需要本地 DSH 环境 |
 | `npm run test:host` | 实际 DSH Host 与官方前端，使用独立临时 home/profile；需要 Windows 和本地 DSH |
 | `npm run test:install` | 打包后调用真实 DSH CLI，验证安装、自动启用、Host 启动与卸载；需要 Windows 和桌面版运行时 |
@@ -57,9 +57,12 @@ lib/           宿主服务与删除逻辑
 scripts/       构建、安装工具
 test/          逻辑、浏览器和宿主集成测试
 client-core.js 客户端共享逻辑
+client-manager.js 管理窗口、选择、预览和批量任务
 client-slot.js 原生侧栏操作组件
 client.js      生成的客户端脚本
 ```
+
+`lib/pruning-policy.js` 是浏览器与逻辑测试共用的纯筛选/保留规则。宿主状态变更通过 `workspaceRegistry` 的公开方法执行，删除继续持有写入所有权。不要在在线管理操作中直接重写工作区 JSON。
 
 ## 提交建议
 

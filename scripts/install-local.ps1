@@ -20,7 +20,7 @@ if ('dsh-chat-prune' -notin @($profilePackage.dsh.profile.bundles)) {
   throw 'The profile does not enable this bundle. See README.md before updating.'
 }
 $runtimeFiles = @(
-  'lib/index.js', 'client-core.js', 'client.js', 'client-slot.js', 'package.json',
+  'lib/index.js', 'lib/pruning-policy.js', 'client-core.js', 'client-manager.js', 'client.js', 'client-slot.js', 'package.json',
   'README.md', 'AUDIT.md', 'CONTRIBUTING.md', 'LICENSE',
   'assets/icon.svg', 'docs/technical-reference.md'
 )

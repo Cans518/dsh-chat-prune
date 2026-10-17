@@ -73,7 +73,7 @@ async function parentMain() {
   const profileDir = join(home, 'profiles', 'audit')
   const installed = join(profileDir, 'node_modules', 'dsh-chat-prune')
   await mkdir(join(installed, 'lib'), { recursive: true })
-  for (const file of ['lib/index.js', 'package.json', 'client.js', 'client-core.js', 'client-slot.js', 'cordis.patch.yml']) {
+  for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'package.json', 'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
     await cp(join(sourceRoot, file), join(installed, file))
   }
   for (const dependency of ['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit', '@standard-schema/spec']) {
@@ -176,6 +176,29 @@ async function parentMain() {
     console.log('Plugin dialogs match themes selected through actual DSH settings')
     const group = page.locator(`[data-row-key="workspace:${ready.workspaceId}"]`)
     if (await group.getAttribute('aria-expanded') === 'false') await group.click()
+    await page.locator('#dshdc-manage').click()
+    const management = page.locator('#dshdc-manager')
+    for (const [action, label] of [
+      ['unarchive', '取消归档'], ['pin', '置顶'], ['archive', '归档'],
+      ['unarchive', '取消归档'], ['archive', '归档'],
+    ]) {
+      await management.getByRole('searchbox').fill(ready.ids[2])
+      await management.locator('.dshdc-record input[type="checkbox"]').check()
+      await management.getByLabel('批量操作', { exact: true }).selectOption(action)
+      await management.getByRole('button', { name: '预览所选操作', exact: true }).click()
+      await page.locator('#dshdc-batch-preview').getByRole('button', { name: `确认${label}`, exact: true }).click()
+      await page.waitForFunction(() => document.querySelector('#dshdc-manager-notice')?.textContent.includes('成功 1，失败 0'))
+      const metadata = await page.evaluate(async (id) =>
+        (await (await fetch('/dsh-chat-prune/sessions')).json()).sessions.find((entry) => entry.id === id), ready.ids[2])
+      assert.equal(metadata.archived, action === 'archive')
+      assert.equal(metadata.pinned, action === 'pin')
+      const disk = JSON.parse(await readFile(join(home, 'storages', 'workspace.json'), 'utf8'))
+      assert.equal(disk.global.archivedSessionIds.includes(ready.ids[2]), metadata.archived)
+      assert.equal(disk.global.pinnedSessionIds.includes(ready.ids[2]), metadata.pinned)
+    }
+    await management.getByRole('button', { name: '关闭', exact: true }).click()
+    await management.waitFor({ state: 'detached' })
+    console.log('Actual manager archive/unarchive/pin round trips match durable workspace state')
     const row = page.locator(`[data-row-key="session:${ready.ids[0]}"]`)
     await row.waitFor({ timeout: 15000 })
     await row.hover()
@@ -207,8 +230,11 @@ async function parentMain() {
     const manager = page.locator('#dshdc-manager')
     await manager.getByRole('searchbox').fill(ready.ids[2])
     await manager.locator('.dshdc-record').waitFor()
-    await manager.locator('.dshdc-record button').click()
-    await page.getByRole('dialog').filter({ hasText: '确认删除' }).getByRole('button', { name: '确认删除', exact: true }).click()
+    await manager.locator('.dshdc-record input[type="checkbox"]').check()
+    await manager.getByLabel('批量操作', { exact: true }).selectOption('delete')
+    await manager.getByRole('button', { name: '预览所选操作', exact: true }).click()
+    await page.locator('#dshdc-batch-preview').getByRole('button', { name: '确认删除记录', exact: true }).click()
+    await page.waitForFunction(() => document.querySelector('#dshdc-manager-notice')?.textContent.includes('成功 1，失败 0'))
     await manager.locator('.dshdc-record').waitFor({ state: 'detached' })
     await manager.getByRole('button', { name: '关闭', exact: true }).click()
     await page.screenshot({ path: join(home, 'after-archived-delete.png') })
