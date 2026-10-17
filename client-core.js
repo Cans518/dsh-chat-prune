@@ -1,8 +1,8 @@
 /**
- * dsh-delete-chat — client half.
+ * dsh-chat-prune — client half.
  *
  * 形态：鼠标移到会话列表某一行上时，在该行右端浮出一个垃圾桶按钮；
- * 点击 → 确认 → 调 host 的 DELETE /dsh-delete-chat/sessions → 列表自己消失。
+ * 点击 → 确认 → 调 host 的 DELETE /dsh-chat-prune/sessions → 列表自己消失。
  *
  * ─────────────────────────────────────────────────────────────
  * 为什么是「悬浮层」而不是「往行里插按钮」
@@ -20,11 +20,11 @@
  * ─────────────────────────────────────────────────────────────
  */
 
-const name = 'dsh-delete-chat'
+const name = 'dsh-chat-prune'
 
-const NS = 'settings.dsh-delete-chat'
+const NS = 'settings.dsh-chat-prune'
 
-const API_BASE = '/dsh-delete-chat'
+const API_BASE = '/dsh-chat-prune'
 
 const LAYER_ID = 'dshdc-layer'
 const BTN_CLASS = 'dshdc-del'
@@ -513,7 +513,7 @@ function confirmDeletion(sessionId, row) {
 }
 
 async function refreshSessionLists(deletedId) {
-  await window.__dshDeleteChatRefreshSessions__?.(deletedId)
+  await window.__dshChatPruneRefreshSessions__?.(deletedId)
   return refreshTitleMap(true)
 }
 
@@ -648,7 +648,7 @@ function openManager() {
 // ---------------------------------------------------------------- 诊断上报
 
 /**
- * 把客户端状态发给宿主，宿主落到 $DSH_HOME/logs/dsh-delete-chat-client.log。
+ * 把客户端状态发给宿主，宿主落到 $DSH_HOME/logs/dsh-chat-prune-client.log。
  *
  * 页面里跑的是普通脚本；宿主那边 CDP 关着、browser access 也关着，出问题时
  * 我在外面看不到页面里发生了什么。这条通道是唯一的现场来源。
@@ -677,7 +677,7 @@ export function apply(ctx) {
   if (typeof document === 'undefined' || !document.body) return
 
   if (ctx?.locale && typeof ctx.locale.register === 'function') {
-    ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-delete-chat: dictionaries')
+    ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chat-prune: dictionaries')
     try {
       currentT = ctx.locale.bind(NS)
     } catch {
@@ -714,7 +714,7 @@ export function apply(ctx) {
   }
 
   function place(hit) {
-    if (window.__dshDeleteChatNativeSlotReady__) return hide()
+    if (window.__dshChatPruneNativeSlotReady__) return hide()
     if (pendingDeletes.size) return
     if (!hit || !hit.row || !hit.row.isConnected) return hide()
     const rect = hit.row.getBoundingClientRect()
@@ -833,11 +833,11 @@ export function apply(ctx) {
   }
   primeTitleMap()
   report('install', { apiBase: API_BASE, hasLayer: Boolean(layer),
-    version: window.__dshDeleteChatBuildVersion__ || 'source' })
+    version: window.__dshChatPruneBuildVersion__ || 'source' })
 
   // 自检手柄
   try {
-    window.dshDeleteChat = {
+    window.dshChatPrune = {
       status: () => {
         const { source, selectors } = activeSelectors()
         return {
@@ -847,8 +847,8 @@ export function apply(ctx) {
           titleMapSize: titleMap.byTitle.size,
           visible: btn.dataset.dshdcVisible === '1',
           current: btn.dataset.dshdcFor || null,
-          nativeRowAction: window.__dshDeleteChatNativeSlotReady__ === true,
-          version: window.__dshDeleteChatBuildVersion__ || 'source',
+          nativeRowAction: window.__dshChatPruneNativeSlotReady__ === true,
+          version: window.__dshChatPruneBuildVersion__ || 'source',
           hostVersion: titleMap.hostVersion || null,
         }
       },
@@ -862,7 +862,7 @@ export function apply(ctx) {
       probe: (el) => ({ isRow: Boolean(resolveRow(el)), id: el ? resolveRow(el)?.id || null : null }),
       openManager,
       requestDelete: (id, button) => askThenDelete(id, button || btn),
-      reportNativeReady: () => report('nativeRowActionReady', { version: window.__dshDeleteChatBuildVersion__ || 'source' }),
+      reportNativeReady: () => report('nativeRowActionReady', { version: window.__dshChatPruneBuildVersion__ || 'source' }),
       setRowSelectors: (list) => {
         if (list === null) localStorage.removeItem(OVERRIDE_KEY)
         else localStorage.setItem(OVERRIDE_KEY, JSON.stringify(list))
@@ -891,10 +891,10 @@ export function apply(ctx) {
       if (l) l.remove()
       const s = document.getElementById('dshdc-style')
       if (s) s.remove()
-      delete window.dshDeleteChat
-      window.__dshDeleteChatInstalled__ = false
+      delete window.dshChatPrune
+      window.__dshChatPruneInstalled__ = false
     },
-    'dsh-delete-chat: dom cleanup',
+    'dsh-chat-prune: dom cleanup',
   )
 }
 

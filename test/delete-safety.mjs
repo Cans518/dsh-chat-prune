@@ -274,9 +274,9 @@ test('HTTP sessions exposes effective backup config and malformed path is a 400'
     })
     return { status, body }
   }
-  const list = await request('GET', '/dsh-delete-chat/sessions')
+  const list = await request('GET', '/dsh-chat-prune/sessions')
   assert.equal(list.body.config.backup, true)
-  assert.equal((await request('DELETE', '/dsh-delete-chat/sessions/%zz')).status, 400)
+  assert.equal((await request('DELETE', '/dsh-chat-prune/sessions/%zz')).status, 400)
 })
 
 test('HTTP deletion refuses a missing persistence dependency before changing disk', async (t) => {
@@ -289,7 +289,7 @@ test('HTTP deletion refuses a missing persistence dependency before changing dis
     on: () => () => {},
   }, {})
   await route.handler({
-    method: 'DELETE', url: '/dsh-delete-chat/sessions',
+    method: 'DELETE', url: '/dsh-chat-prune/sessions',
     async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ sessionId: id })) },
   }, { writeHead(value) { status = value }, end() {} })
   assert.equal(status, 503)

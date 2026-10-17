@@ -107,7 +107,7 @@ async function readWorkspace(home) {
 }
 
 async function main() {
-  console.log('\n== dsh-delete-chat host smoke ==\n')
+  console.log('\n== dsh-chat-prune host smoke ==\n')
 
   const home = await fixture()
   process.env.DSH_HOME = home
@@ -289,10 +289,10 @@ async function main() {
   const mod = await import('../lib/index.js')
   mod.apply(ctxHttp, { backup: true, allowRunning: false })
 
-  await test('apply 注册了 prefix 路由并绑定到 /dsh-delete-chat', () => {
+  await test('apply 注册了 prefix 路由并绑定到 /dsh-chat-prune', () => {
     assert.equal(routes.length, 1)
     assert.equal(routes[0].kind, 'prefix')
-    assert.equal(routes[0].path, '/dsh-delete-chat')
+    assert.equal(routes[0].path, '/dsh-chat-prune')
     assert.equal(effects.length, 2, '应有 routes + index injection 两个 effect')
   })
 
@@ -308,7 +308,7 @@ async function main() {
     assert.equal(table[0].placement, 'body')
     assert.equal(typeof table[0].text, 'string')
     assert.ok(table[0].text.length > 1000, `内联脚本太短: ${table[0].text.length}`)
-    assert.ok(table[0].text.includes('__dshDeleteChatInstalled__'), '内联的不是 client.js')
+    assert.ok(table[0].text.includes('__dshChatPruneInstalled__'), '内联的不是 client.js')
     // 内联内容里不能有裸 </script，否则会提前闭合标签
     assert.equal(/<\/script/i.test(table[0].text), false, '内联脚本里残留 </script')
   })
@@ -351,10 +351,10 @@ async function main() {
   }
 
   await test('GET /ping 返回 home 与配置', async () => {
-    const { status, json } = await call('GET', '/dsh-delete-chat/ping')
+    const { status, json } = await call('GET', '/dsh-chat-prune/ping')
     assert.equal(status, 200)
     assert.equal(json.ok, true)
-    assert.equal(json.name, 'dsh-delete-chat')
+    assert.equal(json.name, 'dsh-chat-prune')
     assert.equal(json.home, home2)
     assert.equal(json.config.backup, true)
     assert.equal(json.config.allowRunning, false)
@@ -363,25 +363,25 @@ async function main() {
   })
 
   await test('GET /client.js 吐出可执行的脚本（按钮注入的来源）', async () => {
-    const { status, raw } = await call('GET', '/dsh-delete-chat/client.js')
+    const { status, raw } = await call('GET', '/dsh-chat-prune/client.js')
     assert.equal(status, 200)
     assert.ok(raw.length > 1000, `脚本太短: ${raw.length}`)
     // 必须是自执行的普通脚本，不是 ESM / 也不是 __ModuleLoader__ 包装
-    assert.match(raw, /__dshDeleteChatInstalled__/, '缺自启动标记')
+    assert.match(raw, /__dshChatPruneInstalled__/, '缺自启动标记')
     const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
     assert.equal(code.includes('__ModuleLoader__'), false, '不该引用 __ModuleLoader__')
     assert.equal(/^\s*(import|export)\s/m.test(code), false, '不该有顶层 import/export')
   })
 
   await test('GET /sessions 列盘', async () => {
-    const { status, json } = await call('GET', '/dsh-delete-chat/sessions')
+    const { status, json } = await call('GET', '/dsh-chat-prune/sessions')
     assert.equal(status, 200)
     assert.equal(json.sessions.length, 4)
     assert.equal(json.sessions.filter((row) => !row.missing).length, 3)
   })
 
   await test('DELETE /sessions 正常删除', async () => {
-    const { status, json } = await call('DELETE', '/dsh-delete-chat/sessions', { sessionId: SESSION_A })
+    const { status, json } = await call('DELETE', '/dsh-chat-prune/sessions', { sessionId: SESSION_A })
     assert.equal(status, 200)
     assert.equal(json.ok, true)
     assert.equal(json.alreadyGone, false)
@@ -389,7 +389,7 @@ async function main() {
   })
 
   await test('DELETE 运行中会话 -> 409', async () => {
-    const { status, json } = await call('DELETE', '/dsh-delete-chat/sessions', { sessionId: SESSION_RUNNING })
+    const { status, json } = await call('DELETE', '/dsh-chat-prune/sessions', { sessionId: SESSION_RUNNING })
     assert.equal(status, 409)
     assert.equal(json.ok, false)
     assert.match(json.error, /正在运行/)
@@ -397,19 +397,19 @@ async function main() {
 
   await test('DELETE 非法 sessionId -> 400', async () => {
     for (const bad of ['', '../etc/passwd', 'a/b', '..', 'x'.repeat(300), 'session-a;rm -rf']) {
-      const { status } = await call('DELETE', '/dsh-delete-chat/sessions', { sessionId: bad })
+      const { status } = await call('DELETE', '/dsh-chat-prune/sessions', { sessionId: bad })
       assert.equal(status, 400, `未拦住: ${JSON.stringify(bad)}`)
     }
   })
 
   await test('DELETE 路径形式可用', async () => {
-    const { status, json } = await call('DELETE', `/dsh-delete-chat/sessions/${SESSION_B}`)
+    const { status, json } = await call('DELETE', `/dsh-chat-prune/sessions/${SESSION_B}`)
     assert.equal(status, 200)
     assert.equal(json.sessionId, SESSION_B)
   })
 
   await test('未知路由 -> 404', async () => {
-    const { status } = await call('GET', '/dsh-delete-chat/nope')
+    const { status } = await call('GET', '/dsh-chat-prune/nope')
     assert.equal(status, 404)
   })
 
@@ -417,7 +417,7 @@ async function main() {
     let status = 0
     let out = ''
     const req = {
-      url: '/dsh-delete-chat/sessions',
+      url: '/dsh-chat-prune/sessions',
       method: 'DELETE',
       headers: {},
       async *[Symbol.asyncIterator]() {

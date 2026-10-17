@@ -42,7 +42,7 @@ async function checkAsync(title, fn) {
 // ---------------------------------------------------------------- H1 行为
 
 const mod = await import(
-  pathToFileURL(join(home, 'profiles', 'desktop', 'node_modules', 'dsh-delete-chat', 'lib', 'index.js')).href
+  pathToFileURL(join(home, 'profiles', 'desktop', 'node_modules', 'dsh-chat-prune', 'lib', 'index.js')).href
 )
 
 console.log('\n== H1：运行检测 ==\n')

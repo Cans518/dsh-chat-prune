@@ -3,13 +3,13 @@
  *
  * 历史教训（两次真实翻车，都写进断言里了）：
  *   1. 早期版本 client.js 带顶层 import —— 宿主加载报
- *      "dsh-delete-chat: import failed"。
+ *      "dsh-chat-prune: import failed"。
  *   2. 后来改成零 import，但 package.json 仍声明 dsh.client ——
  *      宿主会把一个不存在的 React 组件往 slot 里挂，React 抛 #130
  *      「Element type is invalid」，连带把 shell.overlay slot 整个搞崩。
  *
  * 现在的形态：client.js 是**普通 <script>**（由 host 半通过 webserver 的
- * index injection 表插入 <script src="/dsh-delete-chat/client.js">），
+ * index injection 表插入 <script src="/dsh-chat-prune/client.js">），
  * 既不引用 __ModuleLoader__，也不注册任何 slot，IIFE 就地自启动。
  */
 
@@ -123,21 +123,21 @@ check('无 loader 环境下自启动，并留下安装标记', () => {
   const sandbox = makeSandbox()
   vm.createContext(sandbox)
   assert.doesNotThrow(() => new vm.Script(src).runInContext(sandbox))
-  assert.equal(sandbox.window.__dshDeleteChatInstalled__, true, '脚本没自启动')
+  assert.equal(sandbox.window.__dshChatPruneInstalled__, true, '脚本没自启动')
 })
 
-check('自启动后挂上自检手柄 window.dshDeleteChat', () => {
+check('自启动后挂上自检手柄 window.dshChatPrune', () => {
   const sandbox = makeSandbox()
   vm.createContext(sandbox)
   new vm.Script(src).runInContext(sandbox)
-  const h = sandbox.window.dshDeleteChat
-  assert.ok(h, 'dshDeleteChat 手柄缺失')
+  const h = sandbox.window.dshChatPrune
+  assert.ok(h, 'dshChatPrune 手柄缺失')
   assert.equal(typeof h.status, 'function')
   assert.equal(typeof h.setRowSelectors, 'function')
   assert.equal(typeof h.titleMap, 'function')
   assert.equal(typeof h.probe, 'function')
   const st = h.status()
-  assert.equal(st.apiBase, '/dsh-delete-chat')
+  assert.equal(st.apiBase, '/dsh-chat-prune')
   assert.equal(st.visible, false, '初始不该显示按钮')
 })
 
@@ -158,12 +158,12 @@ check('body 尚未就绪时延迟安装，避免永久留下未成功的安装�
   }
   vm.createContext(sandbox)
   new vm.Script(src).runInContext(sandbox)
-  assert.notEqual(sandbox.__dshDeleteChatInstalled__, true)
+  assert.notEqual(sandbox.__dshChatPruneInstalled__, true)
   assert.equal(typeof ready, 'function')
   sandbox.document.body = readyBody
   ready()
-  assert.equal(sandbox.__dshDeleteChatInstalled__, true)
-  assert.ok(sandbox.dshDeleteChat)
+  assert.equal(sandbox.__dshChatPruneInstalled__, true)
+  assert.ok(sandbox.dshChatPrune)
 })
 
 check('DOM 缺失时安静退出（不炸页面）', () => {

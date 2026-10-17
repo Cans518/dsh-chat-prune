@@ -47,12 +47,12 @@
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET | `/dsh-delete-chat/ping` | 插件版本、生效配置和运行检测能力 |
-| GET | `/dsh-delete-chat/sessions` | 对话名单、配置、加载保护及 `missing` 标记 |
-| DELETE | `/dsh-delete-chat/sessions` | JSON 请求体 `{ "sessionId": "session-..." }` |
-| DELETE | `/dsh-delete-chat/sessions/<id>` | 删除指定对话 |
-| GET | `/dsh-delete-chat/client.js` | 构建后的普通客户端脚本 |
-| POST | `/dsh-delete-chat/diag` | 宿主本地的有限大小诊断上报 |
+| GET | `/dsh-chat-prune/ping` | 插件版本、生效配置和运行检测能力 |
+| GET | `/dsh-chat-prune/sessions` | 对话名单、配置、加载保护及 `missing` 标记 |
+| DELETE | `/dsh-chat-prune/sessions` | JSON 请求体 `{ "sessionId": "session-..." }` |
+| DELETE | `/dsh-chat-prune/sessions/<id>` | 删除指定对话 |
+| GET | `/dsh-chat-prune/client.js` | 构建后的普通客户端脚本 |
+| POST | `/dsh-chat-prune/diag` | 宿主本地的有限大小诊断上报 |
 
 主要状态码：400 参数或 JSON 无效；409 会话被占用或路径冲突；413 请求体过大；501 系统不支持在线删除；503 宿主服务不可用；500 文件或索引操作失败。
 
@@ -63,10 +63,10 @@
 可以在 DSH 的浏览器控制台中使用：
 
 ```js
-dshDeleteChat.status()
-dshDeleteChat.refreshTitles()
-dshDeleteChat.openManager()
-dshDeleteChat.probe(document.elementFromPoint(x, y))
+dshChatPrune.status()
+dshChatPrune.refreshTitles()
+dshChatPrune.openManager()
+dshChatPrune.probe(document.elementFromPoint(x, y))
 ```
 
 `status()` 中的 `version` 和 `hostVersion` 用于核对客户端与宿主版本，`nativeRowAction` 表示原生操作按钮是否已接入。刷新插件标题缓存不等于刷新宿主会话名单；界面中的“刷新列表”会同步刷新两者。

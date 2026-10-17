@@ -64,11 +64,11 @@ check('apply 无异常', () => {
   mod.apply(a.ctx, { backup: true, allowRunning: false, icon: 'trash' })
 })
 
-check('注册了 prefix 路由 /dsh-delete-chat', () => {
+check('注册了 prefix 路由 /dsh-chat-prune', () => {
   const r = a.routes.find((x) => x.path)
   assert.ok(r, '没注册任何路由')
   assert.equal(r.kind, 'prefix')
-  assert.equal(r.path, '/dsh-delete-chat')
+  assert.equal(r.path, '/dsh-chat-prune')
   assert.equal(typeof r.handler, 'function')
 })
 

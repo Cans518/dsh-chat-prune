@@ -23,7 +23,7 @@ function check(title, fn) {
   }
 }
 
-console.log('\n== dsh-delete-chat 导出面 ==\n')
+console.log('\n== dsh-chat-prune 导出面 ==\n')
 
 check('导出 name / inject / apply', () => {
   assert.equal(typeof mod.name, 'string')
@@ -124,10 +124,10 @@ check('路由前缀与 client 半一致', () => {
   const clientSrc = readFileSync(new URL('../client-core.js', import.meta.url), 'utf8')
   const m = /const API_BASE = '([^']+)'/.exec(clientSrc)
   assert.ok(m, 'client-core.js 里没找到 API_BASE')
-  assert.equal(m[1], '/dsh-delete-chat')
+  assert.equal(m[1], '/dsh-chat-prune')
   // host 半的路由注册也用同一个前缀
   const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(hostSrc.includes("const ROUTE_PREFIX = '/dsh-delete-chat'"), 'host 前缀不匹配')
+  assert.ok(hostSrc.includes("const ROUTE_PREFIX = '/dsh-chat-prune'"), 'host 前缀不匹配')
 })
 
 console.log(`\n== 结果: ${pass} 通过 / ${fail} 失败 ==\n`)

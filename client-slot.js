@@ -1,6 +1,6 @@
 /* Native DSH client module. Business logic stays in client-core.js. */
 window.__ModuleLoader__.load({
-  id: 'dsh-delete-chat',
+  id: 'dsh-chat-prune',
   factory: (require) => {
     const React = require('react')
     const SLOT = 'sidebar.workspaces.session.row.action'
@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
           event.preventDefault()
           event.stopPropagation()
           const button = event.currentTarget
-          const client = window.dshDeleteChat
+          const client = window.dshChatPrune
           if (!client?.requestDelete) {
             setError(isChinese ? '删除插件尚未就绪，请重新加载界面' : 'Reload the interface to initialize deletion')
             return
@@ -59,29 +59,29 @@ window.__ModuleLoader__.load({
         }
       }
       ctx.effect(() => {
-        window.__dshDeleteChatRefreshSessions__ = refreshSessions
+        window.__dshChatPruneRefreshSessions__ = refreshSessions
         return () => {
-          if (window.__dshDeleteChatRefreshSessions__ === refreshSessions) {
-            delete window.__dshDeleteChatRefreshSessions__
+          if (window.__dshChatPruneRefreshSessions__ === refreshSessions) {
+            delete window.__dshChatPruneRefreshSessions__
           }
         }
       })
       ctx.slots.inject(SLOT, () => {
         const dispose = ctx.slots.register({
           name: SLOT,
-          id: 'dsh-delete-chat.delete',
+          id: 'dsh-chat-prune.delete',
           order: 300,
         }, DeleteSessionAction)
-        window.__dshDeleteChatNativeSlotReady__ = true
-        window.dshDeleteChat?.reportNativeReady?.()
+        window.__dshChatPruneNativeSlotReady__ = true
+        window.dshChatPrune?.reportNativeReady?.()
         document.querySelector('.dshdc-del')?.setAttribute('data-dshdc-visible', '0')
         return () => {
-          window.__dshDeleteChatNativeSlotReady__ = false
+          window.__dshChatPruneNativeSlotReady__ = false
           dispose()
         }
       })
     }
 
-    return { name: 'dsh-delete-chat', inject: ['slots', 'sessions'], apply }
+    return { name: 'dsh-chat-prune', inject: ['slots', 'sessions'], apply }
   },
 })

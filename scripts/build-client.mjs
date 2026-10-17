@@ -4,7 +4,7 @@
  * 为什么需要这一步：
  *   client-core.js 是 ESM（export 函数），便于 node 单测；
  *   而浏览器侧本插件以**普通 <script>** 加载（由 host 半通过 webserver 的
- *   index injection 表插入 <script src="/dsh-delete-chat/client.js">），
+ *   index injection 表插入 <script src="/dsh-chat-prune/client.js">），
  *   不经过任何打包器，也不经过 __ModuleLoader__。
  *
  * 做法：
@@ -68,7 +68,7 @@ const bodyNoTest = bodyNoCjs.replace(
 )
 
 const output = `/**
- * dsh-delete-chat — client 入口（构建产物，勿手改）。
+ * dsh-chat-prune — client 入口（构建产物，勿手改）。
  *
  * 由 scripts/build-client.mjs 从 client-core.js 生成。
  * 改逻辑请改 client-core.js，然后重跑：
@@ -86,8 +86,8 @@ const output = `/**
   "use strict";
   if (typeof document === "undefined") return;
   // 防重复注入（HMR / 路由重渲染可能多次插入同一 script）
-  if (window.__dshDeleteChatInstalled__) return;
-  window.__dshDeleteChatBuildVersion__ = ${JSON.stringify(version)};
+  if (window.__dshChatPruneInstalled__) return;
+  window.__dshChatPruneBuildVersion__ = ${JSON.stringify(version)};
 
 // ---------- begin client-core.js ----------
 ${bodyNoTest}
@@ -108,14 +108,14 @@ ${bodyNoTest}
   };
 
   function start() {
-    if (window.__dshDeleteChatInstalled__ || !document.body) return;
+    if (window.__dshChatPruneInstalled__ || !document.body) return;
     try {
       apply(hostCtx);
-      window.__dshDeleteChatInstalled__ = true;
-      console.info("[dsh-delete-chat] client installed");
+      window.__dshChatPruneInstalled__ = true;
+      console.info("[dsh-chat-prune] client installed");
     } catch (error) {
-      window.__dshDeleteChatInstalled__ = false;
-      console.error("[dsh-delete-chat] client apply failed:", error);
+      window.__dshChatPruneInstalled__ = false;
+      console.error("[dsh-chat-prune] client apply failed:", error);
     }
   }
   if (document.body) start();

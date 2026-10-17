@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="./assets/icon.svg" width="96" height="96" alt="DSH Delete Chat 图标">
+  <img src="./assets/icon.svg" width="96" height="96" alt="DSH Chat Prune 图标">
 </p>
 
-<h1 align="center">DSH Delete Chat</h1>
+<h1 align="center">DSH Chat Prune</h1>
 
 <p align="center">给 DSH NEXT 加上顺手的对话删除按钮。</p>
 
@@ -46,7 +46,7 @@ macOS / Linux 的在线删除目前未开放。Node.js 缺少 zstd 支持时，�
 在终端执行：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-delete-chat/releases/download/v0.2.3/dsh-delete-chat-0.2.3.tgz
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.3.0/dsh-chat-prune-0.3.0.tgz
 ```
 
 安装完成后重新打开 DSH。该命令会安装依赖并自动启用插件，**不需要手动编辑 `package.json` 或添加 YAML 挂载条目**。安装包已包含构建产物，不需要用户克隆源码或编译。
@@ -57,10 +57,10 @@ dsh plugin --profile desktop add https://github.com/Cans518/dsh-delete-chat/rele
 
 ### 离线安装
 
-也可以从 [Releases](https://github.com/Cans518/dsh-delete-chat/releases) 下载 `.tgz`，使用实际文件路径安装：
+也可以从 [Releases](https://github.com/Cans518/dsh-chat-prune/releases) 下载 `.tgz`，使用实际文件路径安装：
 
 ```powershell
-dsh plugin --profile desktop add "C:\Downloads\dsh-delete-chat-0.2.3.tgz"
+dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.3.0.tgz"
 ```
 
 ### 从源码安装
@@ -68,13 +68,13 @@ dsh plugin --profile desktop add "C:\Downloads\dsh-delete-chat-0.2.3.tgz"
 适合开发者。构建完成后仍通过 DSH 命令安装：
 
 ```powershell
-git clone https://github.com/Cans518/dsh-delete-chat.git
-cd dsh-delete-chat
+git clone https://github.com/Cans518/dsh-chat-prune.git
+cd dsh-chat-prune
 npm ci --legacy-peer-deps
 npm run build
 npm test
 npm pack
-$pluginPackage = (Resolve-Path '.\dsh-delete-chat-0.2.3.tgz').Path
+$pluginPackage = (Resolve-Path '.\dsh-chat-prune-0.3.0.tgz').Path
 dsh plugin --profile desktop add $pluginPackage
 ```
 
@@ -100,7 +100,7 @@ dsh plugin --profile desktop add $pluginPackage
 在 DSH 正常退出后，编辑安装目录中的：
 
 ```text
-<DSH 数据目录>/profiles/<profile>/node_modules/dsh-delete-chat/cordis.patch.yml
+<DSH 数据目录>/profiles/<profile>/node_modules/dsh-chat-prune/cordis.patch.yml
 ```
 
 把 `backup: false` 改为 `backup: true`，保存后重新打开 DSH。
@@ -117,6 +117,19 @@ dsh plugin --profile desktop add $pluginPackage
 
 ## 更新与卸载
 
+### 从本项目 0.2.x 迁移
+
+本项目从 0.3.0 起更名为 **dsh-chat-prune**。npm 上的 `dsh-delete-chat` 属于其他作者，请使用本仓库的 Release 安装地址。
+
+如果安装过本项目的旧版，请先正常退出 DSH，另存旧插件 `cordis.patch.yml` 中自己修改过的设置，再依次执行：
+
+```powershell
+dsh plugin --profile desktop remove dsh-delete-chat
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.3.0/dsh-chat-prune-0.3.0.tgz
+```
+
+需要恢复设置时，只将 `backup`、`allowRunning`、`icon` 的值填入新插件的配置文件，保留新版的 `id` 和 `name`；不要用旧文件覆盖整个新文件。然后重新打开 DSH。已有会话和 `deleted-sessions` 备份目录不受改名影响。请勿同时启用新旧两版。
+
 **更新：** 正常退出 DSH，按新版本的 Release 说明重新执行 `dsh plugin --profile desktop add <新安装包地址>`，再打开 DSH。安装前请另存自己修改过的插件 `cordis.patch.yml`，更新后按需恢复设置。
 
 已有依赖但被手动停用的插件，重复 `add` 不会自动重新启用；请到 DSH 的插件管理页启用。
@@ -132,7 +145,7 @@ dsh plugin --profile desktop add $pluginPackage
 **卸载：** 正常退出 DSH，再执行：
 
 ```powershell
-dsh plugin --profile desktop remove dsh-delete-chat
+dsh plugin --profile desktop remove dsh-chat-prune
 ```
 
 命令会移除依赖和对应的 bundle 选择。重新打开 DSH 即可。卸载不会还原此前删除的会话，也不会自动清理备份。
@@ -157,7 +170,7 @@ dsh plugin --profile desktop remove dsh-delete-chat
 
 **如何反馈问题？**
 
-请在 [Issues](https://github.com/Cans518/dsh-delete-chat/issues) 中说明插件版本、DSH 版本、操作步骤和完整错误提示。截图或日志请先去掉 API Key、对话正文及个人路径。插件不会自动上传对话内容到外部服务。
+请在 [Issues](https://github.com/Cans518/dsh-chat-prune/issues) 中说明插件版本、DSH 版本、操作步骤和完整错误提示。截图或日志请先去掉 API Key、对话正文及个人路径。插件不会自动上传对话内容到外部服务。
 
 ## 开发与贡献
 

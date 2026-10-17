@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto'
 
 const home = process.env.DSH_HOME || join(homedir(), '.dsh')
 const profileDir = join(home, 'profiles', 'desktop')
-const installedDir = join(profileDir, 'node_modules', 'dsh-delete-chat')
+const installedDir = join(profileDir, 'node_modules', 'dsh-chat-prune')
 const entry = join(installedDir, 'lib', 'index.js')
 
 let pass = 0
@@ -55,7 +55,7 @@ const { parse } = requireProfile('yaml')
 
 check('安装副本能 import（schemastery 能解析）', () => {
   assert.ok(mod, 'import 返回空')
-  assert.equal(mod.name, 'dsh-delete-chat')
+  assert.equal(mod.name, 'dsh-chat-prune')
 })
 
 check('导出 Config，且带 Standard Schema 的 ~standard', () => {
@@ -68,7 +68,7 @@ check('cordis resolveConfig 用 patch 里的 config 能跑通', () => {
   const patchText = readFileSync(join(installedDir, 'cordis.patch.yml'), 'utf8')
   const patch = parse(patchText)
   const rawConfig = patch?.flatMap((row) => row.insert || [])
-    .find((row) => row.id === 'dsh-delete-chat')?.config
+    .find((row) => row.id === 'dsh-chat-prune')?.config
   assert.ok(rawConfig, 'patch 里没找到插件 config')
   const resolved = cordisResolveConfig(mod, rawConfig)
   for (const [key, value] of Object.entries(rawConfig)) assert.deepEqual(resolved[key], value)
@@ -101,7 +101,7 @@ check('apply 注册路由与 disposer（服务生命周期由 cordis inject 管�
   }
   mod.apply(ctx, cordisResolveConfig(mod, undefined))
   assert.equal(routes.length, 1, `路由数 ${routes.length}`)
-  assert.equal(routes[0].path, '/dsh-delete-chat')
+  assert.equal(routes[0].path, '/dsh-chat-prune')
   assert.equal(routes[0].kind, 'prefix')
   assert.ok(effects.every((x) => x === 'function'), 'effect 必须返回 disposer')
 })

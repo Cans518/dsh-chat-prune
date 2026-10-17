@@ -15,7 +15,7 @@ function fixture(refresh = async () => {}) {
   }
   const window = {
     __ModuleLoader__: { load: (value) => { registered = value } },
-    dshDeleteChat: { requestDelete: async (...args) => { calls.push(args) } },
+    dshChatPrune: { requestDelete: async (...args) => { calls.push(args) } },
   }
   const sandbox = { window, navigator: { language: 'zh-CN' }, document: { querySelector: () => null } }
   vm.runInNewContext(source, sandbox)
@@ -44,15 +44,15 @@ function fixture(refresh = async () => {}) {
 
 test('native module exports a plugin and registers an actual React component', () => {
   const f = fixture()
-  assert.equal(f.registered.id, 'dsh-delete-chat')
+  assert.equal(f.registered.id, 'dsh-chat-prune')
   assert.deepEqual(Array.from(f.module.inject), ['slots', 'sessions'])
   assert.equal(f.entry.name, 'sidebar.workspaces.session.row.action')
   assert.equal(typeof f.component, 'function')
-  assert.equal(f.window.__dshDeleteChatNativeSlotReady__, true)
+  assert.equal(f.window.__dshChatPruneNativeSlotReady__, true)
   f.cleanup()
   assert.equal(f.disposed(), true)
-  assert.equal(f.window.__dshDeleteChatNativeSlotReady__, false)
-  assert.equal(f.window.__dshDeleteChatRefreshSessions__, undefined)
+  assert.equal(f.window.__dshChatPruneNativeSlotReady__, false)
+  assert.equal(f.window.__dshChatPruneRefreshSessions__, undefined)
 })
 
 test('native row action receives exact sessionId and delegates to the shared confirmation flow', async () => {
@@ -74,7 +74,7 @@ test('native row action receives exact sessionId and delegates to the shared con
 
 test('native module never submits when its shared client has not initialized', async () => {
   const f = fixture()
-  delete f.window.dshDeleteChat
+  delete f.window.dshChatPrune
   const element = f.component({ sessionId: 'session-native' })
   await element.props.onClick({ preventDefault() {}, stopPropagation() {} })
   assert.deepEqual(f.calls, [])
@@ -85,7 +85,7 @@ test('refresh reconciles the official session catalog after deletion', async () 
   let pulls = 0
   const f = fixture(async (byId) => { pulls++; delete byId['session-deleted'] })
   f.byId['session-deleted'] = {}
-  await f.window.__dshDeleteChatRefreshSessions__('session-deleted')
+  await f.window.__dshChatPruneRefreshSessions__('session-deleted')
   assert.equal(pulls, 1)
   assert.equal(f.byId['session-deleted'], undefined)
 })
@@ -94,12 +94,12 @@ test('a stale in-flight baseline is followed by a new pull', async () => {
   let pulls = 0
   const f = fixture(async (byId) => { if (++pulls === 2) delete byId['session-deleted'] })
   f.byId['session-deleted'] = {}
-  await f.window.__dshDeleteChatRefreshSessions__('session-deleted')
+  await f.window.__dshChatPruneRefreshSessions__('session-deleted')
   assert.equal(pulls, 2)
 })
 
 test('refresh does not report stale catalog membership as reconciled', async () => {
   const f = fixture()
   f.byId['session-deleted'] = {}
-  await assert.rejects(f.window.__dshDeleteChatRefreshSessions__('session-deleted'), /still contains/)
+  await assert.rejects(f.window.__dshChatPruneRefreshSessions__('session-deleted'), /still contains/)
 })

@@ -46,6 +46,8 @@ npm run test:host
 
 组合安装验收时，先执行 `npm pack`，再运行 `node test/all.mjs --installed --browser --host --install`。
 
+验证 0.2.x 改名迁移时，可将 `DSH_LEGACY_INSTALL_SPEC` 设置为本项目旧版 Release 的 `.tgz` 地址或本地路径，再运行 `npm run test:install`。该用例在独立 profile 中安装旧版、移除旧 bundle，然后安装新版并启动真实 Host，同时检查既有备份文件不受影响；不迁移用户现有安装。只验证新包时不设置此变量即可。
+
 ## 目录
 
 ```text

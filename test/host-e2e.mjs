@@ -71,7 +71,7 @@ async function parentMain() {
   const sourceManifest = JSON.parse(await readFile(join(sourceRoot, 'package.json'), 'utf8'))
   const home = await mkdtemp(join(sourceRoot, '.diagnostics', 'live-host-'))
   const profileDir = join(home, 'profiles', 'audit')
-  const installed = join(profileDir, 'node_modules', 'dsh-delete-chat')
+  const installed = join(profileDir, 'node_modules', 'dsh-chat-prune')
   await mkdir(join(installed, 'lib'), { recursive: true })
   for (const file of ['lib/index.js', 'package.json', 'client.js', 'client-core.js', 'client-slot.js', 'cordis.patch.yml']) {
     await cp(join(sourceRoot, file), join(installed, file))
@@ -82,9 +82,9 @@ async function parentMain() {
     await cp(join(sourceRoot, 'node_modules', dependency), destination, { recursive: true })
   }
   await writeFile(join(profileDir, 'package.json'), JSON.stringify({
-    name: 'dsh-delete-chat-real-host-audit', private: true,
-    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-delete-chat'] } },
-    dependencies: { 'dsh-delete-chat': sourceManifest.version },
+    name: 'dsh-chat-prune-real-host-audit', private: true,
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-chat-prune'] } },
+    dependencies: { 'dsh-chat-prune': sourceManifest.version },
   }, null, 2))
   await writeFile(join(profileDir, 'cordis.patch.yml'), '[]\n')
   console.log(`Starting real DSH host in ${home}`)
@@ -137,7 +137,7 @@ async function parentMain() {
     await page.goto(ready.url)
     await page.locator('#dshdc-manage').waitFor({ timeout: 30000 })
     await page.screenshot({ path: join(home, 'boot.png') })
-    const status = await page.evaluate(() => window.dshDeleteChat.status())
+    const status = await page.evaluate(() => window.dshChatPrune.status())
     assert.equal(status.nativeRowAction, true)
     assert.equal(status.version, sourceManifest.version)
     assert.equal(status.hostVersion, sourceManifest.version)
@@ -192,7 +192,7 @@ async function parentMain() {
     await row.locator('.dshdc-native-del').click()
     await page.getByRole('dialog').getByRole('button', { name: '确认删除', exact: true }).click()
     await row.waitFor({ state: 'detached', timeout: 15000 })
-    const list = await page.evaluate(async () => (await fetch('/dsh-delete-chat/sessions')).json())
+    const list = await page.evaluate(async () => (await fetch('/dsh-chat-prune/sessions')).json())
     assert.equal(list.sessions.some((entry) => entry.id === ready.ids[0]), false)
     assert.equal(list.sessions.some((entry) => entry.id === ready.ids[1]), true)
     const ungrouped = page.locator('[data-row-key="workspace:"]')
@@ -223,7 +223,7 @@ async function parentMain() {
     const selectedRow = page.locator(`[data-row-key="session:${ready.ids[1]}"]`)
     await selectedRow.click()
     await page.waitForFunction(async (id) => {
-      const list = await (await fetch('/dsh-delete-chat/sessions')).json()
+      const list = await (await fetch('/dsh-chat-prune/sessions')).json()
       return list.sessions.some((entry) => entry.id === id && entry.running)
     }, ready.ids[1])
     await page.locator('#dshdc-manage').click()

@@ -15,7 +15,7 @@ const profileDir = join(home, 'profiles', 'desktop')
 console.log('\n== 安装副本的 index injection 夹具验证 ==\n')
 
 // 2) 用插件真实 apply 产出的行
-const plugin = await import(pathToFileURL(join(profileDir, 'node_modules', 'dsh-delete-chat', 'lib', 'index.js')).href)
+const plugin = await import(pathToFileURL(join(profileDir, 'node_modules', 'dsh-chat-prune', 'lib', 'index.js')).href)
 
 const listeners = new Map()
 const ctx = {
@@ -58,7 +58,7 @@ if (typeof renderIndexInjections === 'function') {
     ['不含 src= 外链', !/<script src=/.test(out)],
     ['内联内容里没有裸 </script', !/<\/script[\s\S]*<script>[\s\S]*<\/script>/.test(out.slice(0, -60))],
     ['脚本真的在 body 里', out.indexOf('<script>') > out.indexOf('<body>')],
-    ['包含自启动标记', out.includes('__dshDeleteChatInstalled__')],
+    ['包含自启动标记', out.includes('__dshChatPruneInstalled__')],
   ]
 
   let bad = 0

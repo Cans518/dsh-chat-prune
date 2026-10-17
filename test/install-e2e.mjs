@@ -61,10 +61,12 @@ if (process.argv[2] === '--cli') {
   })
   try {
     assert.equal(app.ctx.get('profileContext').home, home)
-    const url = app.ctx.get('connection').authenticatedUrl(`http://127.0.0.1:${app.ctx.get('webServer').port}/dsh-delete-chat/ping`)
+    const url = app.ctx.get('connection').authenticatedUrl(`http://127.0.0.1:${app.ctx.get('webServer').port}/dsh-chat-prune/ping`)
     const response = await fetch(url)
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).version, process.argv[3])
+    const ping = await response.json()
+    assert.equal(ping.name, 'dsh-chat-prune')
+    assert.equal(ping.version, process.argv[3])
     console.log('Installed bundle boots and serves its versioned API')
   } finally {
     await app.shutdown.shutdown(0)
@@ -77,20 +79,37 @@ if (process.argv[2] === '--cli') {
     await mkdir(profile, { recursive: true })
     const initialBundles = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
     await writeFile(join(profile, 'package.json'), JSON.stringify({
-      name: 'dsh-delete-chat-install-fixture', private: true,
+      name: 'dsh-chat-prune-install-fixture', private: true,
       dsh: { profile: { bundles: initialBundles } },
     }, null, 2))
     await writeFile(join(profile, 'cordis.patch.yml'), '[]\n')
     const manifest = JSON.parse(await readFile(join(sourceRoot, 'package.json'), 'utf8'))
-    const spec = process.env.DSH_INSTALL_SPEC || resolve(sourceRoot, `dsh-delete-chat-${manifest.version}.tgz`)
+    const spec = process.env.DSH_INSTALL_SPEC || resolve(sourceRoot, `${manifest.name}-${manifest.version}.tgz`)
     console.log(`Installing through real DSH CLI into ${home}`)
+    if (process.env.DSH_LEGACY_INSTALL_SPEC) {
+      const sentinel = join(home, 'deleted-sessions', 'migration-sentinel.txt')
+      await mkdir(dirname(sentinel), { recursive: true })
+      await writeFile(sentinel, 'existing backup\n')
+      await runChild(home, '--cli', ['plugin', '--profile', 'desktop', 'add',
+        process.env.DSH_LEGACY_INSTALL_SPEC, '--fetch-retries=0', '--fetch-timeout=30000'], 'legacy-install.log')
+      const legacy = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'))
+      assert.ok(legacy.dependencies['dsh-delete-chat'])
+      assert.deepEqual(legacy.dsh.profile.bundles, [...initialBundles, 'dsh-delete-chat'])
+      await runChild(home, '--cli', ['plugin', '--profile', 'desktop', 'remove', 'dsh-delete-chat'], 'legacy-remove.log')
+      const migrated = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'))
+      assert.equal(migrated.dependencies?.['dsh-delete-chat'], undefined)
+      assert.deepEqual(migrated.dsh.profile.bundles, initialBundles)
+      assert.equal(await readFile(sentinel, 'utf8'), 'existing backup\n')
+    }
     await runChild(home, '--cli', ['plugin', '--profile', 'desktop', 'add', spec,
       '--fetch-retries=0', '--fetch-timeout=30000'], 'install.log')
     const installed = join(profile, 'node_modules', manifest.name)
     const installedManifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8'))
+    assert.equal(installedManifest.name, manifest.name)
     assert.equal(installedManifest.version, manifest.version)
     const saved = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8'))
     assert.ok(saved.dependencies[manifest.name])
+    assert.equal(saved.dependencies['dsh-delete-chat'], undefined)
     assert.deepEqual(saved.dsh.profile.bundles, [...initialBundles, manifest.name])
     assert.equal(await readFile(join(profile, 'cordis.patch.yml'), 'utf8'), '[]\n')
     for (const file of ['lib/index.js', 'client.js', 'client-core.js', 'client-slot.js', 'cordis.patch.yml']) {

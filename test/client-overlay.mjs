@@ -325,7 +325,7 @@ async function test(title, fn) {
     listFailure = false
     apiVersion = 1
     win.confirm = () => true
-    win.__dshDeleteChatNativeSlotReady__ = false
+    win.__dshChatPruneNativeSlotReady__ = false
     T.setTitleMap({ byTitle: new Map(), fetchedAt: 0 })
     frames.clear()
     await fn()
@@ -370,8 +370,8 @@ function mount() {
     btn,
     hover: (el) => { doc.dispatch('mouseover', { target: el, relatedTarget: null }); flushFrames() },
     leave: (el) => { doc.dispatch('mouseout', { target: el, relatedTarget: null }); flushFrames() },
-    status: () => win.dshDeleteChat.status(),
-    probe: (el) => win.dshDeleteChat.probe(el),
+    status: () => win.dshChatPrune.status(),
+    probe: (el) => win.dshChatPrune.probe(el),
     unmount: () => cleanups.forEach((f) => f()),
   }
 }
@@ -456,10 +456,10 @@ await test('原生槽就绪时关闭兼容悬浮按钮，防止两个删除入�
   const h = mount()
   const row = makeRow('任意标题')
   row.setAttribute('data-row-key', `session:${SID_A}`)
-  win.__dshDeleteChatNativeSlotReady__ = true
+  win.__dshChatPruneNativeSlotReady__ = true
   h.hover(row)
   assert.equal(h.btn.dataset.dshdcVisible, '0')
-  win.__dshDeleteChatNativeSlotReady__ = false
+  win.__dshChatPruneNativeSlotReady__ = false
   h.hover(row)
   assert.equal(h.btn.dataset.dshdcVisible, '1')
   h.unmount()

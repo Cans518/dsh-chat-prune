@@ -71,7 +71,7 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
   const table = []
   inject(table)
   server = createServer(async (req, res) => {
-    if (req.url.startsWith('/dsh-delete-chat/')) {
+    if (req.url.startsWith('/dsh-chat-prune/')) {
       if (req.method === 'DELETE') deletes += 1
       if (req.method === 'GET' && req.url.endsWith('/sessions') && failList) {
         res.writeHead(503, { 'content-type': 'application/json' })
@@ -113,7 +113,7 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
   await page.locator('#dshdc-manage').waitFor()
   await page.evaluate(() => {
     window.fixtureRefreshCalls = []
-    window.__dshDeleteChatRefreshSessions__ = async (id) => {
+    window.__dshChatPruneRefreshSessions__ = async (id) => {
       window.fixtureRefreshCalls.push(id)
       if (window.fixtureFailRefresh) {
         window.fixtureFailRefresh = false

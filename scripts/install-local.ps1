@@ -8,12 +8,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $profileRoot = [IO.Path]::GetFullPath((Join-Path $DshHome "profiles\$Profile"))
-$installedRoot = Join-Path $profileRoot 'node_modules\dsh-delete-chat'
+$installedRoot = Join-Path $profileRoot 'node_modules\dsh-chat-prune'
 if (-not (Test-Path -LiteralPath (Join-Path $installedRoot 'package.json') -PathType Leaf)) {
+  if (Test-Path -LiteralPath (Join-Path $profileRoot 'node_modules\dsh-delete-chat\package.json') -PathType Leaf) {
+    throw 'Legacy installation detected. Follow the 0.2.x migration instructions in README.md before using this updater.'
+  }
   throw 'No existing installation found. Use the first-install instructions in README.md.'
 }
 $profilePackage = Get-Content -LiteralPath (Join-Path $profileRoot 'package.json') -Raw | ConvertFrom-Json
-if ('dsh-delete-chat' -notin @($profilePackage.dsh.profile.bundles)) {
+if ('dsh-chat-prune' -notin @($profilePackage.dsh.profile.bundles)) {
   throw 'The profile does not enable this bundle. See README.md before updating.'
 }
 $runtimeFiles = @(

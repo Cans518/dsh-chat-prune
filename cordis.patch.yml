@@ -1,17 +1,17 @@
-# dsh-delete-chat bundle patch
+# dsh-chat-prune bundle patch
 #
-# 一行挂载：host 半注册 /dsh-delete-chat/* 路由，client 半在会话列表上浮出删除按钮。
+# 一行挂载：host 半注册 /dsh-chat-prune/* 路由，client 半在会话列表上浮出删除按钮。
 #
 # 通过 package.json 的 dsh.bundle.patch 作为 bundle layer 加载。
 #
 # 注意：配置写在这里、不要写在 profile 的 patch 层。profile 的 patch 按 id 定位行，
 # 而 insert 出来的行在 patch 阶段还不存在，会刷
-#   patch: entry "dsh-delete-chat" not found
+#   patch: entry "dsh-chat-prune" not found
 # 的无害但难看的告警。
 
 - insert:
-    - id: dsh-delete-chat
-      name: 'dsh-delete-chat'
+    - id: dsh-chat-prune
+      name: 'dsh-chat-prune'
       config:
         # 默认不备份。备份是整目录 copy，大会话会白占一份等量磁盘。
         # 想要可回滚就改成 true，删掉的东西会进
