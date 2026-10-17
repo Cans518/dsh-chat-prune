@@ -113,6 +113,16 @@ async function parentMain() {
     const { chromium } = await import('playwright')
     browser = await chromium.launch({ headless: true })
     page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1400, height: 960 } })
+    // The isolated Host can lack this optional desktop icon. Keep that OS
+    // asset independent of the real theme, session and deletion APIs tested.
+    await page.route('**/open-in-app/icon/explorer', async (route) => {
+      const response = await route.fetch()
+      if (response.status() !== 404) return route.fulfill({ response })
+      return route.fulfill({
+        status: 200, contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#81858c" d="M1 3h5l2 2h7v9H1z"/></svg>',
+      })
+    })
     const pageErrors = []
     const consoleErrors = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
@@ -142,6 +152,28 @@ async function parentMain() {
     await setup.getByRole('button', { name: '稍后配置', exact: true }).click()
     await setup.waitFor({ state: 'detached' })
     console.log('Fresh-host onboarding dismissed through its normal controls')
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    for (const theme of [
+      { name: '深色', scheme: 'dark', surface: 'rgb(44, 44, 46)', text: 'rgb(249, 250, 251)' },
+      { name: '浅色', scheme: 'light', surface: 'rgb(255, 255, 255)', text: 'rgb(15, 17, 21)' },
+    ]) {
+      await page.getByRole('button', { name: theme.name, exact: true }).click()
+      await page.waitForFunction((scheme) => document.documentElement.style.colorScheme === scheme, theme.scheme)
+      await page.locator('#dshdc-manage').click()
+      const themeManager = page.locator('#dshdc-manager')
+      const actual = await themeManager.evaluate((element) => {
+        const css = getComputedStyle(element)
+        return { surface: css.backgroundColor, text: css.color, scheme: css.colorScheme }
+      })
+      assert.deepEqual(actual, { surface: theme.surface, text: theme.text, scheme: theme.scheme })
+      await themeManager.locator('.dshdc-record').first().waitFor()
+      await page.screenshot({ path: join(home, `theme-${theme.scheme}.png`) })
+      await themeManager.getByRole('button', { name: '关闭', exact: true }).click()
+      await themeManager.waitFor({ state: 'detached' })
+    }
+    await page.keyboard.press('Escape')
+    await page.getByRole('dialog', { name: '设置', exact: true }).waitFor({ state: 'detached' })
+    console.log('Plugin dialogs match themes selected through actual DSH settings')
     const group = page.locator(`[data-row-key="workspace:${ready.workspaceId}"]`)
     if (await group.getAttribute('aria-expanded') === 'false') await group.click()
     const row = page.locator(`[data-row-key="session:${ready.ids[0]}"]`)

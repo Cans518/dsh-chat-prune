@@ -82,3 +82,14 @@ dshDeleteChat.probe(document.elementFromPoint(x, y))
 - `client-slot.js`：宿主原生模块，注入 `slots` 和 `sessions` 服务，将 React 组件注册到 `sidebar.workspaces.session.row.action`。
 
 原生组件直接接收会话 ID。兼容层优先读取 `data-row-key="session:..."`，只有无明确 ID 的旧界面才使用唯一标题匹配；重复标题不会猜测目标。
+
+## 主题适配
+
+弹窗、管理入口、搜索框、按钮及提示使用 DSH 提供的 `--dsw-*` 主题变量：
+
+- 弹窗背景和文字：`--dsw-alias-bg-layer-2`、`--dsw-alias-label-primary`。
+- 输入框：`--dsw-alias-bg-layer-1`、`--dsw-alias-border-l4`。
+- 危险操作和悬停：`--dsw-alias-state-error-primary`、`--dsw-alias-interactive-bg-hover-danger`。
+- 焦点、圆角、阴影和遮罩：宿主对应的 `--dsw-focus-ring-*`、`--dsw-radius-*`、`--dsw-elevation-prominent`、`--dsw-alias-bg-mask-1`。
+
+DSH 在 `body` 上更新当前主题变量，插件作为其后代直接继承；`color-scheme` 也继承宿主设置。浅色、深色及通过这些变量提供的自定义主题，都能在窗口保持打开时更新，不依赖重载或额外监听器。缺少宿主变量的旧环境使用系统颜色作为兜底。

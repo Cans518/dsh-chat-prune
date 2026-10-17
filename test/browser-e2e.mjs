@@ -123,6 +123,25 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
   })
   const hoverButton = page.locator('.dshdc-del')
 
+  await t.test('open dialogs follow the host color scheme even when it differs from the OS', async () => {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.evaluate(() => { document.documentElement.style.colorScheme = 'light' })
+    await page.locator('#dshdc-manage').click()
+    const manager = page.locator('#dshdc-manager')
+    try {
+      assert.equal(await manager.evaluate((element) => getComputedStyle(element).colorScheme), 'light')
+      await manager.getByRole('searchbox').fill('session-duplicate')
+      await page.evaluate(() => { document.documentElement.style.colorScheme = 'dark' })
+      assert.equal(await manager.evaluate((element) => getComputedStyle(element).colorScheme), 'dark')
+      assert.equal(await manager.getByRole('searchbox').inputValue(), 'session-duplicate')
+    } finally {
+      await manager.getByRole('button', { name: '关闭', exact: true }).click()
+      await manager.waitFor({ state: 'detached' })
+      await page.evaluate(() => { document.documentElement.style.removeProperty('color-scheme') })
+      await page.emulateMedia({ colorScheme: 'light' })
+    }
+  })
+
   await t.test('host input remains editable after hover and React-owned rows are untouched', async () => {
     await page.getByRole('treeitem').first().hover()
     await hoverButton.waitFor({ state: 'visible' })
@@ -168,6 +187,84 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
     const doc = JSON.parse(await readFile(wsPath, 'utf8'))
     assert.equal(doc.tables.workspaces.fixture.sessionIds.includes('session-first'), false)
     assert.equal(doc.tables.workspaces.fixture.sessionIds.includes('session-second'), false)
+  })
+  await t.test('manager, confirmation and notices update live with body-scoped theme tokens', async () => {
+    const palettes = [
+      { name: 'light', scheme: 'light', surface: '#ffffff', field: '#f5f6fa', text: '#0f1115',
+        muted: '#61666b', border: '#d2d6dd', danger: '#b42318', hover: '#eef1f7',
+        dangerHover: '#fee2e2', focus: '#4176e6', mask: 'rgba(0, 0, 0, 0.24)', radius: '28px', font: 'sans-serif' },
+      { name: 'dark', scheme: 'dark', surface: '#2c2c2e', field: '#232324', text: '#f9fafb',
+        muted: '#cfd3d6', border: '#5b5b60', danger: '#f25a5a', hover: '#3a3a3e',
+        dangerHover: '#49252b', focus: '#7aaaff', mask: 'rgba(0, 0, 0, 0.5)', radius: '28px', font: 'sans-serif' },
+      { name: 'custom', scheme: 'dark', surface: '#122d2b', field: '#0b201f', text: '#e9fff8',
+        muted: '#a0c8ba', border: '#446c60', danger: '#ffab91', hover: '#21443d',
+        dangerHover: '#5a3027', focus: '#82e1c0', mask: 'rgba(1, 10, 7, 0.62)', radius: '20px', font: 'monospace' },
+    ]
+    const tokens = {
+      surface: '--dsw-alias-bg-layer-2', field: '--dsw-alias-bg-layer-1',
+      text: '--dsw-alias-label-primary', muted: '--dsw-alias-label-secondary',
+      border: '--dsw-alias-border-l3', danger: '--dsw-alias-state-error-primary',
+      hover: '--dsw-alias-interactive-bg-hover', dangerHover: '--dsw-alias-interactive-bg-hover-danger',
+      focus: '--dsw-focus-ring-color', mask: '--dsw-alias-bg-mask-1',
+      radius: '--dsw-radius-panel', font: '--dsw-font-family',
+    }
+    const setPalette = (palette) => page.evaluate(({ palette, tokens }) => {
+      document.documentElement.style.colorScheme = palette.scheme
+      for (const [key, name] of Object.entries(tokens)) document.body.style.setProperty(name, palette[key])
+      document.body.style.backgroundColor = palette.field
+      document.body.style.color = palette.text
+    }, { palette, tokens })
+    const rgb = (hex) => `rgb(${hex.slice(1).match(/../g).map((value) => parseInt(value, 16)).join(', ')})`
+    await setPalette(palettes[0])
+    await page.locator('#dshdc-manage').click()
+    const manager = page.locator('#dshdc-manager')
+    const confirmation = page.locator('.dshdc-dialog:not(#dshdc-manager)')
+    try {
+      await manager.locator('.dshdc-record').first().waitFor()
+      await manager.getByRole('searchbox').fill('session-duplicate-b')
+      await manager.locator('.dshdc-record button').click()
+      await confirmation.waitFor()
+      for (const palette of palettes) {
+        await setPalette(palette)
+        for (const modal of [manager, confirmation]) {
+          const style = await modal.evaluate((element) => {
+            const css = getComputedStyle(element)
+            return { background: css.backgroundColor, text: css.color, scheme: css.colorScheme,
+              radius: css.borderRadius, font: css.fontFamily }
+          })
+          assert.deepEqual(style, { background: rgb(palette.surface), text: rgb(palette.text),
+            scheme: palette.scheme, radius: palette.radius, font: palette.font })
+        }
+        assert.equal(await manager.getByRole('searchbox').evaluate((el) => getComputedStyle(el).backgroundColor), rgb(palette.field))
+        assert.equal(await manager.locator('.dshdc-actions').evaluate((el) => getComputedStyle(el).backgroundColor), rgb(palette.surface))
+        assert.equal(await page.locator('#dshdc-notice').evaluate((el) => getComputedStyle(el).backgroundColor), rgb(palette.surface))
+        assert.equal(await confirmation.evaluate((el) => getComputedStyle(el, '::backdrop').backgroundColor), palette.mask)
+        const danger = confirmation.getByRole('button', { name: '确认删除', exact: true })
+        await danger.hover()
+        assert.equal(await danger.evaluate((el) => getComputedStyle(el).color), rgb(palette.danger))
+        assert.equal(await danger.evaluate((el) => getComputedStyle(el).backgroundColor), rgb(palette.dangerHover))
+        const cancel = confirmation.getByRole('button', { name: '取消', exact: true })
+        await cancel.hover()
+        assert.equal(await cancel.evaluate((el) => getComputedStyle(el).backgroundColor), rgb(palette.hover))
+        await cancel.focus()
+        await page.keyboard.press('Tab')
+        assert.equal(await danger.evaluate((el) => getComputedStyle(el).outlineColor), rgb(palette.focus))
+        assert.equal(await manager.getByRole('searchbox').inputValue(), 'session-duplicate-b')
+        if (process.env.DSHDC_SCREENSHOTS || process.argv.includes('--screenshots')) {
+          await mkdir(new URL('./artifacts/', import.meta.url), { recursive: true })
+          await page.screenshot({ path: fileURLToPath(new URL(`./artifacts/theme-${palette.name}.png`, import.meta.url)) })
+        }
+      }
+    } finally {
+      if (await confirmation.count()) await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+      await manager.getByRole('button', { name: '关闭', exact: true }).click()
+      await manager.waitFor({ state: 'detached' })
+      await page.evaluate((tokens) => {
+        for (const name of Object.values(tokens)) document.body.style.removeProperty(name)
+        for (const name of ['background-color', 'color']) document.body.style.removeProperty(name)
+        document.documentElement.style.removeProperty('color-scheme')
+      }, tokens)
+    }
   })
   await t.test('manager is keyboard reachable, searchable and supports same-title or untitled records', async () => {
     await page.locator('#dshdc-manage').focus()

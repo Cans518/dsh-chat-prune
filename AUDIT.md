@@ -11,6 +11,7 @@
 | 真实会话行的 ID 属性被遗漏，按钮依赖过时标题名单 | 接入宿主 `sidebar.workspaces.session.row.action` 原生槽；兼容层读取 `data-row-key="session:..."`，排除 workspace 行和退出克隆 | 宿主 workspace 客户端源码、`client-slot.js`、对应回归测试 |
 | 安装后页面仍执行旧缓存脚本，测试通过误认为已生效 | 注入每次重新读文件；暴露 host/client 版本；客户端验证 API 版本，旧宿主明确拒绝删除；新增客户端模块要求完整重启激活 | host/client 协议与状态、自检脚本、真实窗口截图 |
 | 全屏悬浮根容器依赖 pointer-events，原输入测试没有检查命中 | 改为零尺寸根容器；浏览器模拟皮肤以 important 覆盖 pointer-events，并实际 click 输入框后键入 | `test/browser-e2e.mjs`，兼容层根容器回归断言 |
+| 弹窗固定颜色及浏览器配色与当前宿主主题不一致 | 接入实际 `--dsw-*` 变量，继承宿主 color-scheme；背景、输入、按钮、焦点、遮罩及提示跟随主题 | Chromium 中打开窗口后切换浅色/深色/自定义变量；实际 DSH 设置页切换主题验证 |
 | sessions.get 被错误描述为运行状态，且检测失败可能放行 | 保护全部已附着会话，故障时拒绝；声明实际宿主依赖 | `isRunning`、`canDetectRunning`、`inject` |
 | 活动检测与删除之间可能发生 resume | 在线持有公开 `sessionPersistence.open(id, 'write')` 的写所有权，finally 关闭；所有权冲突返回 409 | 所有权及失败释放回归测试 |
 | 重复标题覆盖、包含匹配猜错目标 | 重复规范化标题标记为歧义；唯一精确匹配；管理窗口按 ID 选择 | `test/client-overlay.mjs`、Chromium 重复标题用例 |
@@ -40,6 +41,7 @@
 - `@deepseek-ai/dsh-agent-loop/lib/index.js:1703`：正式 AgentHandle.dispose 按 cancel → whenIdle → scope.dispose → writer.close → detachAgent → detachSession 释放。插件不拥有原始 handle，不能伪造逐 ID dispose。
 - `@deepseek-ai/dsh-client-ui-workspace/lib/client.js:2247` 普通会话行为 `data-row-key: session:${node.id}`；`:2323` 渲染 `sidebar.workspaces.session.row.action` 并传入 sessionId/displayTitle。`@deepseek-ai/dsh-client-ui-renderer/lib/client.js:1788` 的注册签名为 register(options, component)，而非把组件放进 options。
 - `@deepseek-ai/dsh-api-session-controller/lib/types/client/sessions/service.js:253` 的公开 `refresh()` 重拉宿主会话 baseline；`sessions/manager.js:340` 合并在途请求，`:355` 使用权威 baseline 删除已不存在的条目。仅 detach 工作区会把客户端尚存的会话转到未分组，不能替代刷新客户端会话名单。
+- `@deepseek-ai/dsh-client-ui-primitives/lib/Modal.module.css:43` 使用 `--dsw-alias-bg-layer-2`、`--dsw-elevation-prominent`；`dsh-client-ui-layout/lib/client.js:548` 的 ThemePresenter 将 color-scheme 写到 html、主题 tokens 写到 body，并响应 theme/change。插件使用同一套变量，直接由 CSS 继承更新。
 - 持久化 seam 没有专用删除/保留策略 API；插件执行经所有权保护的带外目录清理。公开 open 可能读取或迁移日志，并不是纯锁操作。
 
 ## 验证范围与边界

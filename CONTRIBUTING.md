@@ -39,6 +39,8 @@ npm run test:host
 
 这些路径仅为占位示例，请替换为本机实际位置。真实 Host 测试不会调用模型或删除现有用户对话；测试材料写入被 Git 忽略的 `.diagnostics/`。可通过 `node test/all.mjs --installed --browser --host` 组合验证本机环境。
 
+浏览器测试覆盖已打开窗口随浅色、深色及自定义主题变量即时变化。真实 Host 测试通过 DSH 设置页切换浅色和深色，核对实际弹窗配色；隔离 Host 缺少可选 Explorer 图标时，测试仅为该图标提供夹具，不替换主题、会话或删除接口。
+
 ## 目录
 
 ```text

@@ -23,6 +23,7 @@
 - **确认后再删**：删除前显示目标和备份设置，避免点错。
 - **可选备份**：开启后先备份，再删除；成功时显示备份位置。
 - **列表同步更新**：删除后同步更新工作区、置顶、归档和客户端会话名单，无需每删一次就重载界面。
+- **跟随 DSH 主题**：确认框、管理窗口和提示使用宿主的主题配色；切换主题时，已打开的窗口也会同步变化。
 - **保护已加载的会话**：默认拒绝删除仍被宿主使用的对话。
 
 > **删除不同于归档。** 默认不备份，确认删除后无法通过插件撤销。需要保留恢复机会时，请先[开启备份](#开启备份)。
@@ -53,7 +54,7 @@ npm test
 npm pack
 ```
 
-当前版本会生成 `dsh-delete-chat-0.2.2.tgz`。
+当前版本会生成 `dsh-delete-chat-0.2.3.tgz`。
 
 ### 2. 安装到 DSH profile
 
@@ -64,7 +65,7 @@ npm pack
 ```powershell
 $dshData = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
 $profileDir = Join-Path $dshData 'profiles\desktop'
-$pluginPackage = (Resolve-Path '.\dsh-delete-chat-0.2.2.tgz').Path
+$pluginPackage = (Resolve-Path '.\dsh-delete-chat-0.2.3.tgz').Path
 npm install --prefix $profileDir --legacy-peer-deps $pluginPackage
 ```
 

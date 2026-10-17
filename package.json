@@ -1,6 +1,6 @@
 {
   "name": "dsh-delete-chat",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DSH conversation deletion with confirmation, optional backups and a searchable manager.",
   "author": "Cans518",
   "repository": {
