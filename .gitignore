@@ -1,0 +1,25 @@
+node_modules/
+test/artifacts/
+*.tgz
+RESTART-LOG.txt
+watcher-heartbeat.txt
+.diagnostics/
+
+# Local DSH source snapshots used during compatibility investigation.
+/_ws2.js
+/_sc.js
+/_fe_index.js
+/_injections.mjs
+/scripts/asar-extract.mjs
+/scripts/find-in-asar.mjs
+/scripts/extract-injections.mjs
+
+# Local credentials, environment overrides and editor files.
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

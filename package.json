@@ -1,0 +1,77 @@
+{
+  "name": "dsh-delete-chat",
+  "version": "0.2.2",
+  "description": "DSH conversation deletion with confirmation, optional backups and a searchable manager.",
+  "author": "Cans518",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cans518/dsh-delete-chat.git"
+  },
+  "homepage": "https://github.com/Cans518/dsh-delete-chat#readme",
+  "bugs": {
+    "url": "https://github.com/Cans518/dsh-delete-chat/issues"
+  },
+  "keywords": ["dsh", "dsh-next", "plugin", "chat", "conversation"],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json",
+    "./client": "./client-slot.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node test/all.mjs",
+    "test:installed": "node test/all.mjs --installed",
+    "test:browser": "node scripts/build-client.mjs && node test/browser-e2e.mjs",
+    "test:host": "node scripts/build-client.mjs && node test/host-e2e.mjs",
+    "prepack": "node scripts/build-client.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-renderer", "@deepseek-ai/dsh-api-session-controller"]
+    },
+    "manifestVersion": 1
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-host-webserver": "^0.2.0-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "files": [
+    "lib",
+    "client.js",
+    "client-core.js",
+    "client-slot.js",
+    "cordis.patch.yml",
+    "assets",
+    "docs",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "README.md",
+    "AUDIT.md"
+  ],
+  "devDependencies": {
+    "playwright": "^1.61.0"
+  }
+}
