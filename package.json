@@ -30,6 +30,7 @@
     "test:installed": "node test/all.mjs --installed",
     "test:browser": "node scripts/build-client.mjs && node test/browser-e2e.mjs",
     "test:host": "node scripts/build-client.mjs && node test/host-e2e.mjs",
+    "test:install": "npm run build && npm pack --ignore-scripts && node test/install-e2e.mjs",
     "prepack": "node scripts/build-client.mjs"
   },
   "dsh": {

@@ -34,16 +34,38 @@
 |---|---|
 | 宿主 | DSH NEXT，需支持客户端插件及工作区服务 |
 | 系统 | 当前在线删除支持 **Windows** |
-| Node.js | 安装和开发建议使用 **Node.js 24**；最低要求为 20 |
+| Node.js | 使用桌面版自带的 `dsh` 命令安装即可；源码开发建议使用 **Node.js 24**，插件最低要求为 20 |
 | 兼容性 | 已在本机 DSH NEXT 的真实 Host 和官方界面验证；不同宿主版本仍可能需要适配 |
 
 macOS / Linux 的在线删除目前未开放。Node.js 缺少 zstd 支持时，部分压缩日志的标题可能读不到，仍可按对话 ID 管理。
 
 ## 安装
 
-目前提供**从源码打包安装**的方式。以下命令在 PowerShell 中运行，请先准备 Git、Node.js 和已经安装好的 DSH NEXT。
+使用 **DSH NEXT 桌面版自带的 `dsh` 命令**安装。先打开过一次桌面应用以初始化 profile，再从系统托盘正常退出 DSH。
 
-### 1. 下载并打包
+在终端执行：
+
+```powershell
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-delete-chat/releases/download/v0.2.3/dsh-delete-chat-0.2.3.tgz
+```
+
+安装完成后重新打开 DSH。该命令会安装依赖并自动启用插件，**不需要手动编辑 `package.json` 或添加 YAML 挂载条目**。安装包已包含构建产物，不需要用户克隆源码或编译。
+
+> 这版 DSH 的完整命令是 `dsh plugin --profile <profile> add <安装源>`，不是顶层 `dsh add`。`desktop` 是桌面专用 profile，应使用桌面版提供的命令；npm 安装的独立 DSH CLI 不允许管理它。终端找不到 `dsh` 时，请先启用桌面版的命令行入口并重新打开终端。
+
+使用 Web profile 时，将命令中的 `desktop` 换成 `web`。请确保安装到实际使用的 profile。
+
+### 离线安装
+
+也可以从 [Releases](https://github.com/Cans518/dsh-delete-chat/releases) 下载 `.tgz`，使用实际文件路径安装：
+
+```powershell
+dsh plugin --profile desktop add "C:\Downloads\dsh-delete-chat-0.2.3.tgz"
+```
+
+### 从源码安装
+
+适合开发者。构建完成后仍通过 DSH 命令安装：
 
 ```powershell
 git clone https://github.com/Cans518/dsh-delete-chat.git
@@ -52,30 +74,9 @@ npm ci --legacy-peer-deps
 npm run build
 npm test
 npm pack
-```
-
-当前版本会生成 `dsh-delete-chat-0.2.3.tgz`。
-
-### 2. 安装到 DSH profile
-
-先从系统托盘**正常退出 DSH**。仅关闭窗口可能仍在后台运行。
-
-以下以默认数据目录和 `desktop` profile 为例；使用自定义目录或其他 profile 时，请修改对应变量。
-
-```powershell
-$dshData = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
-$profileDir = Join-Path $dshData 'profiles\desktop'
 $pluginPackage = (Resolve-Path '.\dsh-delete-chat-0.2.3.tgz').Path
-npm install --prefix $profileDir --legacy-peer-deps $pluginPackage
+dsh plugin --profile desktop add $pluginPackage
 ```
-
-### 3. 启用并重开 DSH
-
-打开 `$profileDir` 下的 `package.json`，在已有的 `dsh.profile.bundles` 数组末尾加入 `"dsh-delete-chat"`，保留原有条目。修改前建议备份该文件。
-
-插件会自动加载自己的配置，不需要再向 profile 的 `cordis.patch.yml` 重复添加插件条目。
-
-重新打开 DSH，即可使用。从旧版更新时，也需要正常退出并重开一次，以加载新代码。
 
 ## 怎么用
 
@@ -116,23 +117,25 @@ npm install --prefix $profileDir --legacy-peer-deps $pluginPackage
 
 ## 更新与卸载
 
-**更新：** 在源码目录运行 `git pull`，重新执行安装步骤。用 npm 安装新包前，请另存自己修改过的 `cordis.patch.yml`，更新后按需恢复设置。
+**更新：** 正常退出 DSH，按新版本的 Release 说明重新执行 `dsh plugin --profile desktop add <新安装包地址>`，再打开 DSH。安装前请另存自己修改过的插件 `cordis.patch.yml`，更新后按需恢复设置。
 
-已经安装并启用插件时，也可以在构建和测试通过后运行：
+已有依赖但被手动停用的插件，重复 `add` 不会自动重新启用；请到 DSH 的插件管理页启用。
+
+源码开发时，已经安装并启用插件也可在构建和测试通过后运行本地更新脚本：
 
 ```powershell
-.\scripts\install-local.ps1 -DshHome $dshData -Profile desktop
+.\scripts\install-local.ps1 -Profile desktop
 ```
 
 该脚本会备份旧文件、保留现有插件配置，并校验复制结果；不会自动重启 DSH。支持 `-WhatIf` 预览。
 
-**卸载：** 正常退出 DSH，从 profile 的 `package.json` 中移除 `dsh.profile.bundles` 数组里的 `"dsh-delete-chat"`，再执行：
+**卸载：** 正常退出 DSH，再执行：
 
 ```powershell
-npm uninstall --prefix $profileDir dsh-delete-chat
+dsh plugin --profile desktop remove dsh-delete-chat
 ```
 
-重新打开 DSH。停用插件不会还原此前删除的会话，也不会自动清理备份。
+命令会移除依赖和对应的 bundle 选择。重新打开 DSH 即可。卸载不会还原此前删除的会话，也不会自动清理备份。
 
 ## 常见问题
 

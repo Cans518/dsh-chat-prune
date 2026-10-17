@@ -27,6 +27,7 @@
 | 定时重试卸载后残留；构建失败可能覆盖产物 | 清理 retry timers/监听器；构建先语法解析再写产物；DOM 就绪后安装 | 客户端生命周期、bundle 测试 |
 | 测试导入安装旧副本冒充当前代码；异步断言未等待 | 默认测试只读当前工作区；安装测试独立启用；修正异步 harness；安装预检比较源码并解析真实 YAML | `test/all.mjs`、`test/installed-preflight.mjs` |
 | node_modules 联接到个人安装，锁文件含本机路径 | 改为正式 registry 依赖，锁定已验证 schemastery 3.18.4，生成可移植锁文件 | `package.json`、`package-lock.json` |
+| 安装依赖后仍要求手动编辑 profile | 以预构建 `.tgz` 通过 `dsh plugin --profile desktop add` 安装，利用 bundle 元数据自动启用；新增真实 CLI 安装及卸载测试 | `test/install-e2e.mjs` 验证依赖、自动追加 bundle、配置保留、Host API 和卸载清理 |
 | 重启脚本按进程名强杀所有实例 | 仅等待指定可执行文件的指定进程正常退出，超时失败；不终止进程 | `restart-watcher.ps1/.cmd` |
 
 ## 宿主实现依据

@@ -22,6 +22,7 @@ npm test
 | `npm run test:browser` | Chromium 交互、真实 HTTP 和临时会话目录 |
 | `npm run test:installed` | 本机已安装插件的配置、代码一致性及宿主集成；需要本地 DSH 环境 |
 | `npm run test:host` | 实际 DSH Host 与官方前端，使用独立临时 home/profile；需要 Windows 和本地 DSH |
+| `npm run test:install` | 打包后调用真实 DSH CLI，验证安装、自动启用、Host 启动与卸载；需要 Windows 和桌面版运行时 |
 
 首次运行浏览器测试前：
 
@@ -40,6 +41,10 @@ npm run test:host
 这些路径仅为占位示例，请替换为本机实际位置。真实 Host 测试不会调用模型或删除现有用户对话；测试材料写入被 Git 忽略的 `.diagnostics/`。可通过 `node test/all.mjs --installed --browser --host` 组合验证本机环境。
 
 浏览器测试覆盖已打开窗口随浅色、深色及自定义主题变量即时变化。真实 Host 测试通过 DSH 设置页切换浅色和深色，核对实际弹窗配色；隔离 Host 缺少可选 Explorer 图标时，测试仅为该图标提供夹具，不替换主题、会话或删除接口。
+
+安装测试复用 `DSH_ASAR` / `DSH_EXECUTABLE`，默认从该安装的 `resources/runtime/<arch>/primary-runtime/dependencies/` 查找 Node 和 pnpm；布局不同时可设置 `DSH_NODE_EXECUTABLE`、`DSH_PNPM`。`DSH_INSTALL_SPEC` 可指定待验证的远程安装源，未指定时使用本项目打包的 `.tgz`。测试使用独立的 `.diagnostics/cli-install-*`，不修改现有用户 profile。
+
+组合安装验收时，先执行 `npm pack`，再运行 `node test/all.mjs --installed --browser --host --install`。
 
 ## 目录
 
