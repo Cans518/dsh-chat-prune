@@ -86,13 +86,7 @@ async function fixture() {
   return home
 }
 
-/**
- * 一个最小 ctx 替身。
- *
- * 「是否在跑」现在只看 `agents` 服务里 `agent.status === 'running'`，所以这里提供
- * agents；同时**故意**让 sessions 对任何会话都返回对象 —— 用来证明
- * 「仅仅被加载」不再阻止删除（那正是 0.4.3 什么都删不掉的原因）。
- */
+/** Unopened records have neither an attached session nor a running agent. */
 function fakeCtx(home, { running = [] } = {}) {
   const runningSet = new Set(running)
   return {
@@ -103,7 +97,7 @@ function fakeCtx(home, { running = [] } = {}) {
       }
       if (name === 'sessions') {
         return {
-          get: () => ({ header: { cwd: 'D:\\Desktop\\test' } }),
+          get: (id) => runningSet.has(id) ? { header: { cwd: 'D:\\Desktop\\test' } } : undefined,
           list: { getSnapshot: () => ({ byId: {} }) },
         }
       }
@@ -304,7 +298,7 @@ async function main() {
     assert.equal(routes.length, 1)
     assert.equal(routes[0].kind, 'prefix')
     assert.equal(routes[0].path, '/dsh-chat-prune')
-    assert.equal(effects.length, 2, '应有 routes + index injection 两个 effect')
+    assert.equal(effects.length, 3, '应有 agent handles + routes + index injection 三个 effect')
   })
 
   await test('订阅了 webserver/index-inject 并推入内联 script 行', () => {

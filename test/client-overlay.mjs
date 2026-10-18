@@ -291,6 +291,7 @@ let fetchRows = []
 let deleteCalls = []
 let deleteReply = { ok: true, status: 200, data: { ok: true, alreadyGone: false } }
 let onDelete = null
+let onList = null
 let listFailure = false
 let apiVersion = 1
 globalThis.fetch = async (url, init) => {
@@ -301,6 +302,7 @@ globalThis.fetch = async (url, init) => {
     return { ok: deleteReply.ok, status: deleteReply.status, json: async () => deleteReply.data }
   }
   if (u.endsWith('/sessions')) {
+    if (onList) return onList()
     if (listFailure) throw new Error('list unavailable')
     return {
       ok: true,
@@ -330,6 +332,7 @@ async function test(title, fn) {
     deleteCalls = []
     deleteReply = { ok: true, status: 200, data: { ok: true, alreadyGone: false } }
     onDelete = null
+    onList = null
     listFailure = false
     apiVersion = 1
     win.confirm = () => true
@@ -589,6 +592,46 @@ await test('正在删除时防重入且不把悬浮按钮换成另一个目标',
   await pending
   assert.equal(deleteCalls.length, 1)
   h.unmount()
+})
+
+await test('卸载后返回的删除结果不会覆盖重装实例的提示', async () => {
+  fetchRows = [{ id: SID_A, title: '甲' }]
+  const first = mount()
+  let release
+  onDelete = () => new Promise((resolve) => { release = resolve })
+  const pending = T.askThenDelete(SID_A, first.btn)
+  await new Promise((resolve) => setImmediate(resolve))
+  first.unmount()
+  const second = mount()
+  win.dshChatPrune.notify('新实例的提示', { tone: 'busy' })
+  release()
+  await pending
+  assert.match(doc.getElementById('dshdc-notice').textContent, /新实例的提示/)
+  second.unmount()
+})
+
+await test('重装实例不复用旧名单请求，旧回包不覆盖新名单和备份设置', async () => {
+  let release
+  onList = () => new Promise((resolve) => { release = resolve })
+  const first = mount()
+  const oldRefresh = T.refreshTitleMap(true)
+  first.unmount()
+  onList = null
+  fetchRows = [{ id: SID_B, title: '新名单' }]
+  const second = mount()
+  try {
+    const newRefresh = T.refreshTitleMap(true)
+    release({ ok: true, status: 200, json: async () => ({
+      ok: true, apiVersion: 1, sessions: [{ id: SID_A, title: '旧名单' }], config: { backup: true },
+    }) })
+    const map = await newRefresh
+    await oldRefresh
+    assert.deepEqual(map.sessions, fetchRows)
+    assert.deepEqual(T.titleMap().sessions, fetchRows)
+    assert.equal(win.__dshdcBackupOn, false)
+  } finally {
+    second.unmount()
+  }
 })
 
 await test('服务端拒绝时给出可见原因，按钮恢复可重试', async () => {

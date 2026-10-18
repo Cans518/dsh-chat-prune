@@ -233,6 +233,42 @@ test('missing activity detection no longer blocks deletion', async (t) => {
   await assert.rejects(() => readFile(join(f.dir, 'session.v4.jsonl.zstd')), /ENOENT/)
 })
 
+test('loaded protection works without agents and preserves both records and indexes', async (t) => {
+  const f = await fixture(t)
+  f.ctx.sessions.get = (value) => value === id ? { id } : undefined
+  const rows = await listSessions(f.ctx)
+  assert.equal(rows.find((row) => row.id === id).running, true)
+  await assert.rejects(() => deleteSession(f.ctx, id, { backup: false }), { status: 409 })
+  assert.equal(await readFile(join(f.dir, 'session.v4.jsonl.zstd'), 'utf8'), 'record')
+  assert.deepEqual(JSON.parse(await readFile(f.wsPath, 'utf8')), f.doc)
+})
+
+test('a retained read projection without a live agent can be removed under write ownership', async (t) => {
+  const f = await fixture(t)
+  f.ctx.sessions.get = () => ({ id })
+  f.ctx.agents = { get: () => undefined }
+  let opened = false, closed = false
+  f.ctx.sessionPersistence = { async open() {
+    opened = true
+    return { async close() { closed = true } }
+  } }
+  assert.equal((await listSessions(f.ctx)).find((row) => row.id === id).running, false)
+  await deleteSession(f.ctx, id)
+  assert.equal(opened && closed, true)
+  await assert.rejects(() => readFile(join(f.dir, 'session.v4.jsonl.zstd')), { code: 'ENOENT' })
+})
+
+test('batch deletion rechecks newly loaded sessions even when allowRunning is set', async (t) => {
+  const f = await fixture(t)
+  f.doc.global.pinnedSessionIds = []
+  await writeFile(f.wsPath, JSON.stringify(f.doc))
+  f.ctx.sessions.get = (value) => value === id ? { id } : undefined
+  await assert.rejects(() => deleteSession(f.ctx, id, {
+    backup: false, protectPinned: true, allowRunning: true,
+  }), { status: 409 })
+  assert.equal(await readFile(join(f.dir, 'session.v4.jsonl.zstd'), 'utf8'), 'record')
+})
+
 test('a session the host still owns is refused with 409 and left intact', async (t) => {
   const f = await fixture(t)
   f.ctx.get = (key) => key === 'sessionPersistence' ? {

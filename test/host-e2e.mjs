@@ -73,7 +73,7 @@ async function parentMain() {
   const profileDir = join(home, 'profiles', 'audit')
   const installed = join(profileDir, 'node_modules', 'dsh-chat-prune')
   await mkdir(join(installed, 'lib'), { recursive: true })
-  for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'package.json', 'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
+  for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'lib/agent-lifecycle.js', 'lib/session-sources.js', 'package.json', 'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
     await cp(join(sourceRoot, file), join(installed, file))
   }
   for (const dependency of ['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit', '@standard-schema/spec']) {
@@ -129,13 +129,17 @@ async function parentMain() {
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text())
     })
-    page.on('response', (response) => {
+    page.on('response', async (response) => {
       if (response.status() >= 400) {
-        failedResponses.push({ status: response.status(), url: redact(response.url()) })
+        failedResponses.push({ status: response.status(), url: redact(response.url()),
+          body: await response.text().catch(() => '') })
       }
     })
     await page.goto(ready.url)
-    await page.locator('#dshdc-manage').waitFor({ timeout: 30000 })
+    const managerEntry = page.locator('.dshdc-sidebar-manage')
+    await managerEntry.waitFor({ timeout: 30000 })
+    assert.equal(await page.locator('[data-slot="sidebar.footer.action"] .dshdc-sidebar-manage').count(), 1)
+    assert.equal(await page.locator('#dshdc-manage').isVisible(), false)
     await page.screenshot({ path: join(home, 'boot.png') })
     const status = await page.evaluate(() => window.dshChatPrune.status())
     assert.equal(status.nativeRowAction, true)
@@ -147,19 +151,38 @@ async function parentMain() {
     const preview = page.getByRole('dialog', { name: '预览版说明' })
     await preview.waitFor({ state: 'visible', timeout: 15000 })
     await preview.getByRole('button', { name: '继续', exact: true }).click()
-    const setup = page.getByRole('dialog', { name: '添加一个 API Key 开始使用' })
+    const setup = page.getByRole('dialog', { name: /^(添加一个 API Key 开始使用|开始使用)$/ })
     await setup.waitFor({ state: 'visible', timeout: 15000 })
-    await setup.getByRole('button', { name: '稍后配置', exact: true }).click()
+    const setupDismiss = await setup.getAttribute('aria-label') === '开始使用' ? '关闭' : '稍后配置'
+    await setup.getByRole('button', { name: setupDismiss, exact: true }).click()
     await setup.waitFor({ state: 'detached' })
+    // Model initialization can reopen onboarding after a later session switch.
+    // Handle it at action time so it cannot race an earlier isVisible() check.
+    const exposedSetup = page.locator('body:not(:has(.dshdc-dialog[open]))')
+      .getByRole('dialog', { name: /^(添加一个 API Key 开始使用|开始使用)$/ })
+    await page.addLocatorHandler(exposedSetup, async (dialog) => {
+      await dialog.getByRole('button', { name: setupDismiss, exact: true }).click()
+    })
     console.log('Fresh-host onboarding dismissed through its normal controls')
-    await page.getByRole('button', { name: '设置', exact: true }).click()
+    async function openSettings() {
+      const settings = page.getByRole('button', { name: '设置', exact: true })
+      if (await settings.count()) {
+        await settings.click()
+      } else {
+        await page.getByRole('button', { name: '账号菜单', exact: true }).click()
+        await page.getByText('设置', { exact: true }).click()
+      }
+    }
     for (const theme of [
       { name: '深色', scheme: 'dark', surface: 'rgb(44, 44, 46)', text: 'rgb(249, 250, 251)' },
       { name: '浅色', scheme: 'light', surface: 'rgb(255, 255, 255)', text: 'rgb(15, 17, 21)' },
     ]) {
+      await openSettings()
       await page.getByRole('button', { name: theme.name, exact: true }).click()
       await page.waitForFunction((scheme) => document.documentElement.style.colorScheme === scheme, theme.scheme)
-      await page.locator('#dshdc-manage').click()
+      await page.keyboard.press('Escape')
+      await page.getByRole('dialog', { name: '设置', exact: true }).waitFor({ state: 'detached' })
+      await managerEntry.click()
       const themeManager = page.locator('#dshdc-manager')
       const actual = await themeManager.evaluate((element) => {
         const css = getComputedStyle(element)
@@ -176,7 +199,7 @@ async function parentMain() {
     console.log('Plugin dialogs match themes selected through actual DSH settings')
     const group = page.locator(`[data-row-key="workspace:${ready.workspaceId}"]`)
     if (await group.getAttribute('aria-expanded') === 'false') await group.click()
-    await page.locator('#dshdc-manage').click()
+    await managerEntry.click()
     const management = page.locator('#dshdc-manager')
     for (const [action, label] of [
       ['unarchive', '取消归档'], ['pin', '置顶'], ['archive', '归档'],
@@ -201,6 +224,11 @@ async function parentMain() {
     console.log('Actual manager archive/unarchive/pin round trips match durable workspace state')
     const row = page.locator(`[data-row-key="session:${ready.ids[0]}"]`)
     await row.waitFor({ timeout: 15000 })
+    await row.click()
+    await page.waitForFunction(async (id) =>
+      (await (await fetch('/dsh-chat-prune/sessions')).json()).sessions.some((entry) => entry.id === id && entry.releasable),
+    ready.ids[0])
+    await page.locator(`[data-row-key="session:${ready.ids[1]}"]`).click()
     await row.hover()
     await row.locator('.dshdc-native-del').waitFor({ state: 'visible', timeout: 15000 })
     console.log('Native action visible on actual host-rendered row')
@@ -226,7 +254,7 @@ async function parentMain() {
     assert.equal(await page.locator(`[data-row-key="session:${ready.ids[0]}"]`).count(), 0,
       'Deleted session must also disappear from the ungrouped sidebar')
     console.log('Actual persistence deletion and live workspace list refresh passed')
-    await page.locator('#dshdc-manage').click()
+    await managerEntry.click()
     const manager = page.locator('#dshdc-manager')
     await manager.getByRole('searchbox').fill(ready.ids[2])
     await manager.locator('.dshdc-record').waitFor()
@@ -250,14 +278,27 @@ async function parentMain() {
     await selectedRow.click()
     await page.waitForFunction(async (id) => {
       const list = await (await fetch('/dsh-chat-prune/sessions')).json()
-      return list.sessions.some((entry) => entry.id === id && entry.running)
+      return list.sessions.some((entry) => entry.id === id && entry.releasable)
     }, ready.ids[1])
-    await page.locator('#dshdc-manage').click()
+    await managerEntry.click()
     await manager.getByRole('searchbox').fill(ready.ids[1])
     await manager.locator('.dshdc-record').waitFor()
-    assert.equal(await manager.locator('.dshdc-record button').isDisabled(), true)
-    assert.match(await manager.locator('.dshdc-record').innerText(), /正在运行或已加载/)
-    console.log('Selected loaded session remains protected in the actual host')
+    assert.equal(await manager.locator('.dshdc-record button').isDisabled(), false)
+    assert.match(await manager.locator('.dshdc-record').innerText(), /空闲可删除/)
+    console.log('Previously opened idle sessions use the actual lifecycle handle and remain deletable')
+    await page.evaluate(() => window.dshChatPrune.notify('删除失败：提示交互验收', { tone: 'error' }))
+    await manager.getByRole('button', { name: '关闭提示', exact: true }).click()
+    assert.equal(await page.locator('#dshdc-notice').isVisible(), false)
+    await page.clock.install()
+    try {
+      await page.evaluate(() => window.dshChatPrune.notify('自动关闭验收', { tone: 'error' }))
+      assert.equal(await page.locator('#dshdc-notice').isVisible(), true)
+      await page.clock.fastForward(12000)
+      assert.equal(await page.locator('#dshdc-notice').isVisible(), false)
+    } finally {
+      await page.clock.resume()
+    }
+    console.log('Error notices can be closed and expire inside the actual host manager')
     assert.deepEqual(pageErrors, [])
     assert.deepEqual(consoleErrors, [])
     console.log('REAL_HOST_E2E_PASS', home)
@@ -265,6 +306,7 @@ async function parentMain() {
     console.log('Failed host responses:', failedResponses)
     if (page && !page.isClosed()) {
       await page.screenshot({ path: join(home, 'failure.png') })
+      await writeFile(join(home, 'failure.html'), await page.content())
       console.log('Remaining dialogs:', await page.evaluate(() => [...document.querySelectorAll('[role="dialog"]')].map(
         (element) => ({
           html: element.outerHTML.slice(0, 14000),

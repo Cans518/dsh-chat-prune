@@ -58,11 +58,11 @@ const zh = {
   'manage.empty': '没有匹配的对话',
   'manage.loading': '正在读取对话…',
   'manage.untitled': '无标题对话',
-  'manage.running': '正在运行或已加载',
+  'manage.running': '进行中或受保护',
   'manage.cancel': '取消',
   'manage.delete': '确认删除',
   'manage.backup': '备份位置：',
-  'manage.unknown': '无法检测运行状态，删除已禁用。请检查宿主服务后刷新。',
+  'manage.unknown': '运行检测不可用，删除时仍会校验宿主写入锁。',
   'manage.missing': '本地记录已缺失，可清理残留索引',
   'manage.count': '{count} 个对话',
   'confirm.missing': '将从会话列表清理 {id} 的残留索引。本地记录已不存在。',
@@ -92,11 +92,11 @@ const en = {
   'manage.empty': 'No matching conversations',
   'manage.loading': 'Loading conversations…',
   'manage.untitled': 'Untitled conversation',
-  'manage.running': 'Running or loaded',
+  'manage.running': 'Running or protected',
   'manage.cancel': 'Cancel',
   'manage.delete': 'Delete conversation',
   'manage.backup': 'Backup location: ',
-  'manage.unknown': 'Activity detection is unavailable. Restore the host service and refresh.',
+  'manage.unknown': 'Activity detection is unavailable. Deletion will still check host write ownership.',
   'manage.missing': 'Local record missing; remove stale list entries',
   'manage.count': '{count} conversations',
   'confirm.missing': 'Remove stale list entries for {id}. The local record is already missing.',
@@ -177,6 +177,7 @@ async function requestJson(url, init = {}) {
       const error = new Error(data?.error || `${response.status} ${response.statusText || ''}`)
       error.status = response.status
       error.definitive = true
+      error.outcomeUnknown = data?.outcomeUnknown === true
       error.partial = data?.partial
       error.backupDir = data?.backupDir
       throw error
@@ -196,14 +197,17 @@ async function refreshTitleMap(force = false) {
     return titleMap
   }
   if (titleRequest) return titleRequest
-  titleRequest = (async () => {
+  const generation = clientGeneration
+  const pending = (async () => {
     const data = await requestJson(`${API_BASE}/sessions`)
+    if (generation !== clientGeneration) return titleMap
     if (data.apiVersion !== 1) throw new Error(currentT('state.hostOutdated'))
     const rows = Array.isArray(data?.sessions) ? data.sessions : []
     const backupOn = data?.config ? data.config.backup === true : undefined
     if (backupOn !== undefined) window.__dshdcBackupOn = backupOn
     const byTitle = new Map()
     for (const row of rows) {
+      if (row.sourceId && row.sourceId !== 'local') continue
       if (!row?.id || !row.title) continue
       const key = normalizeTitle(row.title)
       // Duplicates remain explicitly ambiguous, including the third occurrence.
@@ -211,13 +215,14 @@ async function refreshTitleMap(force = false) {
     }
     titleMap = { byTitle, fetchedAt: now, sessions: rows, config: data.config || {},
       canDetectRunning: data.canDetectRunning, hostVersion: data.version, actions: data.actions || [],
-      managementVersion: data.managementVersion }
+      managementVersion: data.managementVersion, sources: data.sources || [] }
     return titleMap
   })()
+  titleRequest = pending
   try {
-    return await titleRequest
+    return await pending
   } finally {
-    titleRequest = null
+    if (titleRequest === pending) titleRequest = null
   }
 }
 
@@ -342,7 +347,7 @@ function ensureLayer() {
   const style = document.createElement('style')
   style.id = 'dshdc-style'
   style.textContent = `
-#${LAYER_ID}, .dshdc-native-del {
+#${LAYER_ID}, .dshdc-native-del, .dshdc-sidebar-manage {
   --dshdc-surface: var(--dsw-alias-bg-layer-2, Canvas);
   --dshdc-text: var(--dsw-alias-label-primary, CanvasText);
   --dshdc-muted: var(--dsw-alias-label-secondary, GrayText);
@@ -384,10 +389,18 @@ function ensureLayer() {
 .dshdc-native-del:hover { color:var(--dshdc-danger) !important; background:var(--dshdc-danger-hover) !important; }
 .dshdc-native-del:focus-visible { outline:var(--dsw-focus-ring-width, 2px) solid var(--dshdc-focus); outline-offset:2px; }
 .dshdc-native-del:disabled { opacity:.5; cursor:wait !important; }
-#dshdc-manage { all:unset; position:fixed; right:16px; bottom:16px; pointer-events:auto;
+#dshdc-manage { all:unset; position:fixed; left:12px; bottom:64px; pointer-events:auto;
   padding:10px 14px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px); cursor:pointer;
   background:var(--dshdc-surface); color:var(--dshdc-text); font:inherit; }
 #dshdc-manage:hover { background:var(--dshdc-hover); }
+#dshdc-manage[hidden] { display:none; }
+.dshdc-sidebar-manage { display:flex; align-items:center; justify-content:center; gap:10px;
+  box-sizing:border-box; min-height:44px; width:100%; padding:10px 12px;
+  border:0; border-radius:var(--dsw-radius-md,8px); background:transparent;
+  color:var(--dshdc-text); cursor:pointer; font:inherit; white-space:nowrap; }
+.dshdc-sidebar-manage:hover { background:var(--dshdc-hover); }
+.dshdc-sidebar-manage:focus-visible { outline:2px solid var(--dshdc-focus); outline-offset:-2px; }
+.dshdc-sidebar-manage:active { background:var(--dshdc-active); }
 .dshdc-dialog { color-scheme:inherit; box-sizing:border-box; width:min(640px, calc(100vw - 32px));
   max-height:80vh; padding:24px; border:0; border-radius:var(--dsw-radius-panel, 12px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
@@ -405,11 +418,11 @@ function ensureLayer() {
   background:transparent; color:var(--dshdc-text); border-radius:var(--dsw-radius-md, 6px); cursor:pointer; font:inherit; }
 .dshdc-dialog button:hover:not(:disabled) { background:var(--dshdc-hover); }
 .dshdc-dialog button:active:not(:disabled) { background:var(--dshdc-active); }
-.dshdc-dialog button:disabled { opacity:.55; cursor:wait; }
+.dshdc-dialog button:disabled { opacity:.55; cursor:not-allowed; }
 .dshdc-dialog :is(button, input, select, summary):focus-visible, #dshdc-manage:focus-visible {
   outline:var(--dsw-focus-ring-width, 2px) solid var(--dshdc-focus); outline-offset:2px; }
 .dshdc-actions { display:flex; justify-content:flex-end; gap:12px; flex-wrap:wrap; margin-top:20px; }
-#dshdc-manager > .dshdc-actions { position:sticky; top:-24px; padding:12px 0;
+#dshdc-manager > .dshdc-actions { flex-shrink:0; padding:4px 0 12px;
   background:var(--dshdc-surface); z-index:1; margin-top:0; }
 #dshdc-manager > .dshdc-actions h2 { margin:0 auto 0 0; align-self:center; }
 .dshdc-dialog button.dshdc-danger { border-color:var(--dshdc-danger); color:var(--dshdc-danger); }
@@ -417,9 +430,24 @@ function ensureLayer() {
 .dshdc-record { display:flex; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--dshdc-border); }
 .dshdc-record-text { flex:1; min-width:0; overflow-wrap:anywhere; white-space:pre-wrap; }
 #dshdc-manager-notice { color:var(--dshdc-muted); white-space:pre-wrap; }
-#dshdc-manager { width:min(1040px, calc(100vw - 32px)); }
+#dshdc-manager { width:min(1040px, calc(100vw - 32px)); max-height:90vh; }
+#dshdc-manager[open] { display:flex; flex-direction:column; overflow:hidden; }
+.dshdc-manager-body { min-height:0; overflow:auto; padding:4px; margin-inline:-4px; }
 .dshdc-summary { font-weight:600; }
-.dshdc-filters { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.dshdc-summary { padding:12px 16px; margin:4px 0 12px; border:1px solid var(--dshdc-border);
+  border-radius:var(--dsw-radius-md,8px); background:var(--dsw-alias-bg-layer-1,Field); }
+.dshdc-source-tools { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
+.dshdc-source-tools > span { font-size:13px; color:var(--dshdc-muted); }
+.dshdc-source-panel { padding:16px; margin-block:16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md,8px); }
+.dshdc-source-panel h3 { margin:0 0 8px; font-size:16px; }
+.dshdc-source-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px 0; border-bottom:1px solid var(--dshdc-border); }
+.dshdc-source-row > div { flex:1; min-width:160px; overflow-wrap:anywhere; }
+.dshdc-source-row small { display:block; color:var(--dshdc-muted); }
+.dshdc-source-panel form { margin-top:16px; }
+.dshdc-dialog button.dshdc-primary { background:var(--dshdc-focus); color:var(--dsw-alias-label-on-color,HighlightText); border-color:transparent; }
+.dshdc-dialog button.dshdc-primary:hover:not(:disabled) { background:color-mix(in srgb,var(--dshdc-focus) 85%,var(--dshdc-text)); }
+.dshdc-filters { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+.dshdc-filter-tools { display:flex; gap:8px; margin:12px 0; }
 .dshdc-field { display:flex; flex-direction:column; gap:4px; min-width:0; font-size:13px; }
 .dshdc-field :is(input, select) { margin:0; }
 .dshdc-field:has(input[type="search"]) { grid-column:span 2; }
@@ -432,6 +460,8 @@ function ensureLayer() {
 .dshdc-rules summary { cursor:pointer; padding:6px 0; }
 .dshdc-rules .dshdc-filters { margin-top:12px; }
 .dshdc-batch-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.dshdc-batch-tools:has(.dshdc-primary) { flex-shrink:0; padding:12px 0 0; margin-bottom:0;
+  background:var(--dshdc-surface); border-top:1px solid var(--dshdc-border); }
 .dshdc-batch-tools .dshdc-field { min-width:120px; }
 .dshdc-hint, .dshdc-rules p { font-size:13px; color:var(--dshdc-muted); }
 .dshdc-preview-list { max-height:35vh; overflow:auto; overflow-wrap:anywhere; white-space:pre-wrap; border-block:1px solid var(--dshdc-border); }
@@ -442,7 +472,9 @@ function ensureLayer() {
   .dshdc-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .dshdc-record { gap:10px; }
   .dshdc-record > button { padding:8px; }
-  #dshdc-manager > .dshdc-actions { top:-16px; }
+  #dshdc-manager > .dshdc-actions { gap:8px; }
+  #dshdc-manager > .dshdc-actions button { padding:8px; }
+  .dshdc-source-tools { align-items:flex-start; flex-direction:column; }
 }
 #dshdc-notice { position:fixed; right:16px; bottom:72px; max-width:min(480px, calc(100vw - 32px));
   padding:12px 40px 12px 16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px);
@@ -491,23 +523,13 @@ function ensureButton(layer, onClick) {
 
 // ---------------------------------------------------------------- 删除
 
-/**
- * 顶部/底部提示条。
- *
- * 历史 bug：只 set textContent，既没有超时也没有关闭按钮 —— 一旦出现
- * 「删除失败: …」，它就**永久钉在屏幕上**，连后续成功也不会让它消失。
- *
- * 现在：
- *   - 忙时（deleting）用 sticky，等结果来替换；
- *   - 成功 6 秒自动消失；
- *   - 失败 12 秒自动消失，并且始终带一个 × 可以立刻关掉。
- */
+/** Busy notices remain until replaced; results can be dismissed or expire. */
 let noticeTimer = 0
 
 function dismissNotice() {
   clearTimeout(noticeTimer)
   noticeTimer = 0
-  const el = document.getElementById('dshdc-notice') || document.getElementById('dshdc-manager-notice')
+  const el = document.getElementById('dshdc-notice')
   if (el) {
     el.textContent = ''
     el.hidden = true
@@ -521,7 +543,12 @@ function notify(message, { tone = 'info', timeout } = {}) {
     notice.id = 'dshdc-notice'
     notice.setAttribute('role', 'status')
     notice.setAttribute('aria-live', 'polite')
-    document.getElementById(LAYER_ID)?.appendChild(notice)
+  }
+  // Modal dialogs make everything outside them inert, including close buttons.
+  const parent = document.getElementById('dshdc-manager-notice') || document.getElementById(LAYER_ID)
+  if (notice.parentElement !== parent) {
+    if (parent?.id === 'dshdc-manager-notice') parent.textContent = ''
+    parent?.appendChild(notice)
   }
   notice.hidden = false
   notice.dataset.tone = tone
@@ -573,10 +600,11 @@ let dialogCount = 0
 let confirmation = null
 let disposeManager = null
 const pendingDeletes = new Set()
+let clientGeneration = 0
 
 function confirmDeletion(sessionId, row) {
   const t = currentT
-  const backupOn = titleMap.config?.backup === true
+  const backupOn = titleMap.config?.backup === true || row?.backup === true
   const body = (row?.missing ? t('confirm.missing') : backupOn ? t('confirm.bodyBackup') : t('confirm.body')).replace('{id}', sessionId)
   const dialog = createDialog(t('confirm.title'))
   if (typeof dialog.showModal !== 'function') {
@@ -584,7 +612,7 @@ function confirmDeletion(sessionId, row) {
     return Promise.resolve(window.confirm(`${t('confirm.title')}\n\n${row?.title || ''}\n${body}`))
   }
   const detail = document.createElement('p')
-  detail.textContent = [row?.title || t('manage.untitled'), row?.workspace, body].filter(Boolean).join('\n')
+  detail.textContent = [row?.title || t('manage.untitled'), row?.workspace, row?.sourceHome, body].filter(Boolean).join('\n')
   dialog.appendChild(detail)
   const actions = document.createElement('div')
   actions.className = 'dshdc-actions'
@@ -622,45 +650,50 @@ async function refreshSessionLists(deletedId) {
   return refreshTitleMap(true)
 }
 
-async function askThenDelete(sessionId, btn) {
+async function askThenDelete(sessionId, btn, sourceId = 'local') {
   const t = currentT
+  const generation = clientGeneration
   if (pendingDeletes.size || confirmation) return false
   pendingDeletes.add(sessionId)
   btn.disabled = true
   try {
     // Revalidate the target and effective backup setting before confirmation.
     const map = await refreshTitleMap(true)
-    const row = map.sessions?.find((item) => item.id === sessionId)
+    if (generation !== clientGeneration) return false
+    const row = map.sessions?.find((item) => item.id === sessionId && (item.sourceId || 'local') === sourceId)
+    if (row?.readOnly) throw new Error('请先在路径设置中连接此目录所属的 DSH 宿主')
     // 注意：这里**不再**因为 canDetectRunning=false 就拒绝。
     // 0.4.3 会因此直接抛错，导致宿主没暴露 agents 服务时「什么都删不掉」。
     // 真正能不能删，交给 host 的写入所有权判定（409 会带回明确原因）。
-    if (!await confirmDeletion(sessionId, row)) return false
+    if (!await confirmDeletion(sessionId, row) || generation !== clientGeneration) return false
     btn.dataset.dshdcState = 'deleting'
     btn.title = t('state.deleting')
     notify(t('state.deleting'), { tone: 'busy' })
     const data = await requestJson(`${API_BASE}/sessions`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId }),
+      body: JSON.stringify({ sessionId, ...(sourceId !== 'local' ? { sourceId } : {}) }),
     })
+    if (generation !== clientGeneration) return false
     btn.dataset.dshdcState = 'done'
     btn.title = data && data.alreadyGone ? t('state.gone') : t('state.done')
     notify(`${btn.title}${data.backupDir ? `\n${t('manage.backup')}${data.backupDir}` : ''}`, { tone: 'done' })
     try {
-      await refreshSessionLists(sessionId)
+      await refreshSessionLists(sourceId === 'local' ? sessionId : undefined)
     } catch {
-      notify(t('state.refreshFailed'), { tone: 'error' })
+      if (generation === clientGeneration) notify(t('state.refreshFailed'), { tone: 'error' })
     }
     btn.dataset.dshdcVisible = '0'
     return true
   } catch (error) {
+    if (generation !== clientGeneration) return false
     const msg = String((error && error.message) || error)
     btn.dataset.dshdcState = 'failed'
     btn.title = error.name === 'AbortError' ? t('state.timeout') : error.outcomeUnknown ? t('state.unknown') : `${t('state.failed')}: ${msg}`
     notify(`${btn.title}${error.partial ? `\n${t('state.partial')}` : ''}${error.backupDir ? `\n${t('manage.backup')}${error.backupDir}` : ''}`, { tone: 'error' })
     return false
   } finally {
-    pendingDeletes.delete(sessionId)
+    if (generation === clientGeneration) pendingDeletes.delete(sessionId)
     btn.disabled = false
   }
 }
@@ -668,16 +701,22 @@ async function askThenDelete(sessionId, btn) {
 function openManager() {
   const existing = document.getElementById('dshdc-manager')
   if (existing) { existing.focus(); return }
+  const generation = clientGeneration
   disposeManager = showConversationManager({
     createDialog, t: currentT, loadSessions: refreshSessionLists, deleteOne: askThenDelete,
     request: requestJson, apiBase: API_BASE,
     beginBatch: () => {
-      if (pendingDeletes.size || confirmation) return false
+      if (generation !== clientGeneration || pendingDeletes.size || confirmation) return false
       pendingDeletes.add('batch')
       return true
     },
-    endBatch: () => pendingDeletes.delete('batch'),
+    endBatch: () => {
+      if (generation === clientGeneration) pendingDeletes.delete('batch')
+    },
   })
+  const notice = document.getElementById('dshdc-notice')
+  const manager = document.getElementById('dshdc-manager')
+  if (notice && manager) manager.appendChild(notice)
 }
 
 // ---------------------------------------------------------------- 诊断上报
@@ -710,6 +749,7 @@ export const inject = ['locale']
 
 export function apply(ctx) {
   if (typeof document === 'undefined' || !document.body) return
+  const generation = ++clientGeneration
 
   if (ctx?.locale && typeof ctx.locale.register === 'function') {
     ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chat-prune: dictionaries')
@@ -728,6 +768,8 @@ export function apply(ctx) {
   const manage = document.createElement('button')
   manage.id = 'dshdc-manage'
   manage.textContent = currentT('manage.title')
+  manage.hidden = window.__dshChatPruneManagerSlotReady__ === true
+  manage.setAttribute('aria-haspopup', 'dialog')
   manage.addEventListener('click', openManager)
   layer.appendChild(manage)
 
@@ -920,6 +962,14 @@ export function apply(ctx) {
   ctx.effect(
     () => () => {
       disposed = true
+      if (generation === clientGeneration) {
+        clientGeneration++
+        pendingDeletes.clear()
+        titleRequest = null
+        titleMap = { byTitle: new Map(), fetchedAt: 0, sessions: [], config: {} }
+        delete window.__dshdcBackupOn
+      }
+      dismissNotice()
       confirmation?.()
       disposeManager?.()
       disposeManager = null

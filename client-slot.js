@@ -4,6 +4,22 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const React = require('react')
     const SLOT = 'sidebar.workspaces.session.row.action'
+    const MANAGER_SLOT = 'sidebar.footer.action'
+
+    function ManageConversations({ wide }) {
+      const isChinese = !navigator.language || /^zh/i.test(navigator.language)
+      const label = isChinese ? '管理对话' : 'Manage conversations'
+      return React.createElement('button', {
+        type: 'button', className: 'dshdc-sidebar-manage',
+        'aria-label': label, title: label, 'aria-haspopup': 'dialog',
+        onClick: () => window.dshChatPrune?.openManager(),
+      }, React.createElement('svg', {
+        viewBox: '0 0 24 24', width: 20, height: 20, 'aria-hidden': true,
+        fill: 'none', stroke: 'currentColor', strokeWidth: 1.6,
+        strokeLinecap: 'round', strokeLinejoin: 'round',
+      }, React.createElement('path', { d: 'M4 5h16v12H9l-5 4V5Zm4 4h8M8 13h5' })),
+      wide ? React.createElement('span', null, label) : null)
+    }
 
     function DeleteSessionAction({ sessionId }) {
       const [busy, setBusy] = React.useState(false)
@@ -77,6 +93,18 @@ window.__ModuleLoader__.load({
         document.querySelector('.dshdc-del')?.setAttribute('data-dshdc-visible', '0')
         return () => {
           window.__dshChatPruneNativeSlotReady__ = false
+          dispose()
+        }
+      })
+      ctx.slots.inject(MANAGER_SLOT, () => {
+        const dispose = ctx.slots.register({
+          name: MANAGER_SLOT, id: 'dsh-chat-prune.manage', order: 200,
+        }, ManageConversations)
+        window.__dshChatPruneManagerSlotReady__ = true
+        document.getElementById?.('dshdc-manage')?.setAttribute('hidden', '')
+        return () => {
+          window.__dshChatPruneManagerSlotReady__ = false
+          document.getElementById?.('dshdc-manage')?.removeAttribute('hidden')
           dispose()
         }
       })

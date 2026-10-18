@@ -15,12 +15,16 @@ function fixture(refresh = async () => {}) {
   }
   const window = {
     __ModuleLoader__: { load: (value) => { registered = value } },
-    dshChatPrune: { requestDelete: async (...args) => { calls.push(args) } },
+    dshChatPrune: {
+      requestDelete: async (...args) => { calls.push(args) },
+      openManager: () => calls.push('manager'),
+    },
   }
   const sandbox = { window, navigator: { language: 'zh-CN' }, document: { querySelector: () => null } }
   vm.runInNewContext(source, sandbox)
   const module = registered.factory((name) => { assert.equal(name, 'react'); return React })
-  let entry, component, cleanup
+  let entry, component
+  const cleanups = [], registrations = new Map()
   const effects = []
   const byId = {}
   const ctx = { effect: (effect) => effects.push(effect()), sessions: {
@@ -28,19 +32,36 @@ function fixture(refresh = async () => {}) {
     list: { getSnapshot: () => ({ byId }) },
   }, slots: {
     inject(name, callback) {
-      assert.equal(name, 'sidebar.workspaces.session.row.action')
-      cleanup = callback()
+      assert.ok(['sidebar.workspaces.session.row.action', 'sidebar.footer.action'].includes(name))
+      cleanups.push(callback())
     },
     register(options, value) {
-      entry = options
-      component = value
+      registrations.set(options.name, value)
+      if (options.name === 'sidebar.workspaces.session.row.action') {
+        entry = options
+        component = value
+      }
       return () => { disposed = true }
     },
   } }
   module.apply(ctx)
-  return { module, entry, component, window, states, calls, registered, byId,
-    cleanup: () => { cleanup(); effects.forEach((dispose) => dispose()) }, disposed: () => disposed }
+  return { module, entry, component, window, states, calls, registered, byId, registrations,
+    cleanup: () => { cleanups.forEach((dispose) => dispose()); effects.forEach((dispose) => dispose()) }, disposed: () => disposed }
 }
+
+test('manager uses the sidebar footer slot in expanded and collapsed layouts', () => {
+  const f = fixture()
+  const component = f.registrations.get('sidebar.footer.action')
+  const wide = component({ wide: true }), collapsed = component({ wide: false })
+  assert.equal(wide.props['aria-label'], '管理对话')
+  assert.equal(wide.children[1].children[0], '管理对话')
+  assert.equal(collapsed.children[1], null)
+  collapsed.props.onClick()
+  assert.deepEqual(f.calls, ['manager'])
+  assert.equal(f.window.__dshChatPruneManagerSlotReady__, true)
+  f.cleanup()
+  assert.equal(f.window.__dshChatPruneManagerSlotReady__, false)
+})
 
 test('native module exports a plugin and registers an actual React component', () => {
   const f = fixture()

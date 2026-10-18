@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createServer } from 'node:http'
+import { once } from 'node:events'
 import { mkdtemp, mkdir, writeFile, readFile, rm, utimes, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -68,6 +69,7 @@ test('manager: real HTTP, retention, metadata round trips, protected batches and
         }
         if (req.method === 'DELETE') {
           requests.push(req.method)
+          server.emit('fixture-delete')
           if (gate) { const waiting = gate; gate = null; await waiting }
         }
         if (req.method === 'POST' && req.url.endsWith('/sessions/action') && dropNextMutation) {
@@ -113,6 +115,7 @@ test('manager: real HTTP, retention, metadata round trips, protected batches and
   await page.locator('#dshdc-manage').click()
   const manager = page.locator('#dshdc-manager')
   await manager.locator('.dshdc-record').first().waitFor()
+  await manager.getByRole('button', { name: '更多筛选', exact: true }).click()
   const choose = async (query, action) => {
     await manager.getByRole('searchbox').fill(query)
     await manager.getByRole('button', { name: '选择全部筛选结果', exact: true }).click()
@@ -303,6 +306,38 @@ test('manager: real HTTP, retention, metadata round trips, protected batches and
     await choose('session-other-old', 'archive')
     await page.locator('#dshdc-batch-preview').getByRole('button', { name: '取消', exact: true }).click()
     assert.deepEqual(errors, [])
+  })
+  await t.test('a disposed batch response cannot release the new instance operation guard', async () => {
+    const before = requests.length
+    gate = new Promise((resolve) => { releaseGate = resolve })
+    const started = once(server, 'fixture-delete', { signal: AbortSignal.timeout(6000) })
+    await choose('session-paged-0', 'delete')
+    await page.evaluate(() => { window.fixtureOldResults = document.querySelector('#dshdc-results') })
+    await page.locator('#dshdc-batch-preview').getByRole('button', { name: '确认删除记录', exact: true }).click()
+    await started
+    assert.equal(requests.length, before + 1)
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })))
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })))
+    await page.locator('#dshdc-manage').click()
+    await manager.locator('.dshdc-record').first().waitFor()
+    await choose('session-paged-54', 'archive')
+    releaseGate()
+    await page.waitForFunction(() => window.fixtureOldResults.textContent.includes('成功'))
+    await page.evaluate(() => {
+      window.fixtureSingleResult = 'pending'
+      window.dshChatPrune.requestDelete('session-paged-53').then((result) => { window.fixtureSingleResult = result })
+    })
+    try {
+      await page.waitForFunction(() => window.fixtureSingleResult !== 'pending' ||
+        document.querySelectorAll('.dshdc-dialog').length > 2)
+      assert.equal(await page.evaluate(() => window.fixtureSingleResult), false)
+      assert.equal(await page.locator('.dshdc-dialog').count(), 2)
+      assert.equal(requests.length, before + 1)
+    } finally {
+      const single = page.locator('.dshdc-dialog:not(#dshdc-manager):not(#dshdc-batch-preview)')
+      if (await single.count()) await single.getByRole('button', { name: '取消', exact: true }).click()
+      await page.locator('#dshdc-batch-preview').getByRole('button', { name: '取消', exact: true }).click()
+    }
   })
   await t.test('an old host without management protocol support disables batch actions', async () => {
     await page.route('**/dsh-chat-prune/sessions', async (route) => {

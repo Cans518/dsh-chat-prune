@@ -123,6 +123,22 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
   })
   const hoverButton = page.locator('.dshdc-del')
 
+  await t.test('error notices can be dismissed, reused and expire in the browser', async () => {
+    const notice = page.locator('#dshdc-notice')
+    await page.evaluate(() => window.dshChatPrune.notify('删除失败：测试', { tone: 'error' }))
+    await notice.getByRole('button', { name: '关闭提示' }).click()
+    assert.equal(await notice.isVisible(), false)
+    await page.clock.install()
+    try {
+      await page.evaluate(() => window.dshChatPrune.notify('再次失败', { tone: 'error' }))
+      assert.equal(await notice.isVisible(), true)
+      await page.clock.fastForward(12000)
+      assert.equal(await notice.isVisible(), false)
+    } finally {
+      await page.clock.resume()
+    }
+  })
+
   await t.test('open dialogs follow the host color scheme even when it differs from the OS', async () => {
     await page.emulateMedia({ colorScheme: 'dark' })
     await page.evaluate(() => { document.documentElement.style.colorScheme = 'light' })
@@ -216,11 +232,22 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
     }, { palette, tokens })
     const rgb = (hex) => `rgb(${hex.slice(1).match(/../g).map((value) => parseInt(value, 16)).join(', ')})`
     await setPalette(palettes[0])
+    await page.evaluate(() => window.dshChatPrune.notify('打开管理窗口之前的失败', { tone: 'error' }))
     await page.locator('#dshdc-manage').click()
     const manager = page.locator('#dshdc-manager')
     const confirmation = page.locator('.dshdc-dialog:not(#dshdc-manager)')
     try {
       await manager.locator('.dshdc-record').first().waitFor()
+      assert.equal(await manager.locator('#dshdc-notice').count(), 1,
+        'Opening a modal must keep the existing notice dismissible')
+      await manager.getByRole('button', { name: '关闭提示' }).click()
+      assert.equal(await manager.locator('.dshdc-record button').first().isEnabled(), true,
+        'Missing agents service must not disable cold sessions')
+      await page.evaluate(() => window.dshChatPrune.notify('管理窗口中的失败', { tone: 'error' }))
+      await manager.getByRole('button', { name: '关闭提示' }).click()
+      assert.equal(await page.locator('#dshdc-notice').isVisible(), false)
+      // Keep the notice visible while testing live theme changes.
+      await page.evaluate(() => window.dshChatPrune.notify('主题测试', { tone: 'busy' }))
       await manager.getByRole('searchbox').fill('session-duplicate-b')
       await manager.locator('.dshdc-record button').click()
       await confirmation.waitFor()
@@ -281,6 +308,16 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
     assert.match(await confirm.innerText(), /session-duplicate-a/)
     await confirm.getByRole('button', { name: '确认删除', exact: true }).click()
     await manager.locator('.dshdc-record').waitFor({ state: 'hidden' })
+    const notice = manager.locator('#dshdc-notice')
+    assert.match(await notice.innerText(), /已删除/)
+    await page.clock.install()
+    try {
+      await page.clock.fastForward(6000)
+      assert.equal(await notice.isVisible(), false, 'A successful manager deletion must expire without leaving copied text')
+      assert.equal(await manager.locator('#dshdc-manager-notice').innerText(), '')
+    } finally {
+      await page.clock.resume()
+    }
     await search.fill('无标题')
     // Search IDs and workspace too; an untitled row is explicitly identified by ID.
     await search.fill('session-untitled')

@@ -31,6 +31,18 @@ test('retention counts the full workspace, independently for each workspace and 
   assert.equal(plan.skipped.recent, 1)
 })
 
+test('identical IDs in different source paths have independent retention and filter identities', () => {
+  const rows = [
+    row('same', 90, { key: 'A:same', sourceId: 'A', workspaceKey: 'A:main' }),
+    row('new', 1, { key: 'A:new', sourceId: 'A', workspaceKey: 'A:main' }),
+    row('same', 10, { key: 'B:same', sourceId: 'B', workspaceKey: 'B:main' }),
+    row('old', 100, { key: 'B:old', sourceId: 'B', workspaceKey: 'B:main' }),
+  ]
+  const plan = buildPrunePlan(rows, rows, { keepRecent: 1, olderDays: 30, now })
+  assert.deepEqual(plan.sessions.map((entry) => entry.key), ['A:same', 'B:old'])
+  assert.deepEqual(filterSessions(rows, { source: 'B' }).map((entry) => entry.key), ['B:same', 'B:old'])
+})
+
 test('pruning protects pins, loaded, missing and unknown dates even with keep zero', () => {
   const rows = [row('pin', 90, { pinned: true }), row('loaded', 90, { running: true }),
     row('missing', 90, { missing: true }), row('unknown', 90, { mtime: 0 }),

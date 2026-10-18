@@ -40,7 +40,9 @@ npm run test:host
 
 这些路径仅为占位示例，请替换为本机实际位置。真实 Host 测试不会调用模型或删除现有用户对话；测试材料写入被 Git 忽略的 `.diagnostics/`。可通过 `node test/all.mjs --installed --browser --host` 组合验证本机环境。
 
-浏览器测试覆盖已打开窗口随浅色、深色及自定义主题变量即时变化。真实 Host 测试通过 DSH 设置页切换浅色和深色，核对实际弹窗配色；隔离 Host 缺少可选 Explorer 图标时，测试仅为该图标提供夹具，不替换主题、会话或删除接口。
+浏览器测试覆盖已打开窗口随浅色、深色及自定义主题变量即时变化，以及页面卸载恢复时的名单请求和批量操作隔离。真实 Host 测试通过 DSH 设置页切换浅色和深色，核对实际弹窗配色；兼容旧版 API Key 向导和 2.0.19-next 的“开始使用”向导、账号菜单设置入口，均通过正常按钮进入。隔离 Host 缺少可选 Explorer 图标时，测试仅为该图标提供夹具，不替换主题、会话或删除接口。
+
+多来源浏览器测试覆盖新增和持久化路径、两个目录下相同 ID 的独立选择、合并预览、只删除指定来源、未连接来源的只读状态与移除来源保留数据。生命周期逻辑测试覆盖 caller proxy 身份、原始所有权、预览后开始运行的拒绝及先释放再持锁；真实 Host 测试先打开记录并切换到另一会话，再从侧栏删除已打开的历史记录。
 
 安装测试复用 `DSH_ASAR` / `DSH_EXECUTABLE`，默认从该安装的 `resources/runtime/<arch>/primary-runtime/dependencies/` 查找 Node 和 pnpm；布局不同时可设置 `DSH_NODE_EXECUTABLE`、`DSH_PNPM`。`DSH_INSTALL_SPEC` 可指定待验证的远程安装源，未指定时使用本项目打包的 `.tgz`。测试使用独立的 `.diagnostics/cli-install-*`，不修改现有用户 profile。
 

@@ -23,6 +23,10 @@
 // ---------- begin client-core.js ----------
 const DAY_MS = 86400000
 
+function sessionKey(row) {
+  return row.key || row.id
+}
+
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return '—'
   if (bytes < 1024) return `${bytes} B`
@@ -33,7 +37,8 @@ function formatBytes(bytes) {
 function filterSessions(rows, filters = {}, now = Date.now()) {
   const query = (filters.query || '').trim().toLocaleLowerCase()
   return rows.filter((row) => {
-    if (query && !`${row.title || ''} ${row.workspace || ''} ${row.id}`.toLocaleLowerCase().includes(query)) return false
+    if (query && !`${row.title || ''} ${row.workspace || ''} ${row.id} ${row.sourceName || ''} ${row.sourceHome || ''}`.toLocaleLowerCase().includes(query)) return false
+    if (filters.source && row.sourceId !== filters.source) return false
     if (filters.workspace && row.workspaceKey !== filters.workspace) return false
     if (filters.status === 'archived' && !row.archived) return false
     if (filters.status === 'active' && (row.archived || row.missing)) return false
@@ -48,7 +53,7 @@ function filterSessions(rows, filters = {}, now = Date.now()) {
       : filters.sort === 'largest' ? b.bytes - a.bytes
       : filters.sort === 'title' ? (a.title || '').localeCompare(b.title || '')
       : b.mtime - a.mtime
-    return compared || a.id.localeCompare(b.id)
+    return compared || sessionKey(a).localeCompare(sessionKey(b))
   })
 }
 
@@ -63,14 +68,14 @@ function buildPrunePlan(allRows, candidates, { keepRecent = 10, olderDays = 30, 
   for (const row of filterSessions(allRows.filter((entry) => !entry.missing), { sort: 'newest' })) {
     const workspace = row.workspaceKey || row.workspace
     const count = counts.get(workspace) || 0
-    if (count < keepRecent || !(row.mtime > 0)) retained.add(row.id)
+    if (count < keepRecent || !(row.mtime > 0)) retained.add(sessionKey(row))
     counts.set(workspace, count + 1)
   }
   const selected = []
   const skipped = { pinned: 0, loaded: 0, missing: 0, recent: 0, age: 0 }
   for (const row of candidates) {
     const reason = row.missing ? 'missing' : row.running ? 'loaded' : row.pinned ? 'pinned'
-      : retained.has(row.id) ? 'recent'
+      : retained.has(sessionKey(row)) ? 'recent'
       : !(row.mtime > 0) || row.mtime >= now - olderDays * DAY_MS ? 'age' : null
     if (reason) skipped[reason] += 1
     else selected.push(row)
@@ -123,60 +128,136 @@ function showConversationManager(services) {
     element.value = value
     return field(label, element, parent)
   }
-  let rows = [], map = {}, selected = new Set(), page = 0, closed = false, busy = false, stopped = false, retention = null
+  let rows = [], map = {}, selected = new Set(), page = 0, closed = false, busy = false, loading = false, stopped = false, retention = null
   let cancelPreview = null
+  let editingSource = false
   const pageSize = 50
   const actions = node('div', undefined, 'dshdc-actions')
   const refresh = button(t('manage.refresh'), () => load())
   const close = button(t('manage.close'), () => dialog.close())
   actions.append(dialog.querySelector('h2'), refresh, close)
   const stats = node('p', undefined, 'dshdc-summary')
+  const sourceTools = node('div', undefined, 'dshdc-source-tools')
+  const sourcePanel = node('section', undefined, 'dshdc-source-panel')
+  sourcePanel.id = 'dshdc-sources'
+  sourcePanel.hidden = true
+  const sourceToggle = button(text('管理来源路径', 'Manage source paths'), () => {
+    sourcePanel.hidden = !sourcePanel.hidden
+    sourceToggle.setAttribute('aria-expanded', String(!sourcePanel.hidden))
+  })
+  sourceToggle.setAttribute('aria-expanded', 'false')
+  sourceToggle.setAttribute('aria-controls', sourcePanel.id)
+  actions.insertBefore(sourceToggle, refresh)
+  sourceTools.append(node('span', text('集中查看所有目录，按来源分别执行操作。', 'Browse all directories together; actions stay within their source.')))
+  const sourceList = node('div', undefined, 'dshdc-source-list')
+  const sourceForm = node('form', undefined, 'dshdc-filters')
+  const sourceName = field(text('来源名称', 'Source name'), node('input'), sourceForm)
+  const sourceHome = field(text('DSH 数据目录', 'DSH data directory'), node('input'), sourceForm)
+  sourceHome.required = true
+  sourceHome.placeholder = text('绝对路径，目录内应有 sessions 文件夹', 'Absolute path containing a sessions folder')
+  const sourceEndpoint = field(text('所属宿主的本机访问地址（可选）', 'Local host URL (optional)'), node('input'), sourceForm)
+  sourceEndpoint.type = 'url'
+  sourceEndpoint.placeholder = 'http://127.0.0.1:3000/?token=…'
+  const saveSource = node('button', text('保存路径', 'Save path'), 'dshdc-primary')
+  saveSource.type = 'submit'
+  const cancelEdit = button(text('取消编辑', 'Cancel editing'), resetSourceForm)
+  cancelEdit.hidden = true
+  const sourceFeedback = node('p', undefined, 'dshdc-hint')
+  sourceFeedback.setAttribute('role', 'status')
+  sourceForm.append(saveSource, cancelEdit)
+  function resetSourceForm() {
+    sourceForm.reset()
+    editingSource = false
+    sourceHome.readOnly = false
+    cancelEdit.hidden = true
+    sourceEndpoint.placeholder = 'http://127.0.0.1:3000/?token=…'
+  }
+  sourcePanel.append(node('h3', text('来源路径', 'Source paths')),
+    node('p', text('填写 DSH 数据根目录。连接该目录所属的本机 DSH 宿主后可删除、归档和置顶；未连接时可合并查看与搜索。移除来源只会停止显示，不会删除对话。',
+      'Enter a DSH data root. Connect its local DSH host to delete, archive and pin records; disconnected paths support inventory and search. Removing a source keeps its conversations.'), 'dshdc-hint'),
+    sourceList, sourceForm, sourceFeedback)
+  sourceForm.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    if (busy || loading) return
+    busy = true
+    setBusyControls()
+    sourceFeedback.textContent = text('正在校验路径与连接…', 'Checking path and connection…')
+    try {
+      await request(`${apiBase}/sources`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: sourceName.value, home: sourceHome.value.trim(),
+          endpoint: editingSource && !sourceEndpoint.value.trim() ? undefined : sourceEndpoint.value.trim() }) })
+      resetSourceForm()
+      sourceFeedback.textContent = text('路径已保存。', 'Path saved.')
+      await load()
+    } catch (error) { sourceFeedback.textContent = error.message }
+    finally {
+      busy = false
+      if (!closed) { setBusyControls(); render() }
+    }
+  })
   const filters = node('div', undefined, 'dshdc-filters')
   const search = node('input')
   search.type = 'search'
   search.placeholder = t('manage.search')
   field(t('manage.search'), search, filters)
   const workspace = select(text('工作区', 'Workspace'), [['', text('全部工作区', 'All workspaces')]], filters)
+  const source = select(text('来源路径', 'Source path'), [['', text('全部路径', 'All paths')]], filters)
+  const advanced = node('div', undefined, 'dshdc-filters')
+  advanced.id = 'dshdc-advanced-filters'
+  advanced.hidden = true
+  const filterTools = node('div', undefined, 'dshdc-filter-tools')
+  const advancedToggle = button(text('更多筛选', 'More filters'), () => {
+    advanced.hidden = !advanced.hidden
+    advancedToggle.setAttribute('aria-expanded', String(!advanced.hidden))
+  })
+  advancedToggle.setAttribute('aria-expanded', 'false')
+  advancedToggle.setAttribute('aria-controls', advanced.id)
   const status = select(text('状态', 'Status'), [
     ['', text('全部状态', 'All statuses')], ['active', text('未归档', 'Unarchived')],
     ['archived', text('已归档', 'Archived')], ['pinned', text('已置顶', 'Pinned')],
     ['loaded', t('manage.running')], ['missing', text('记录缺失', 'Missing records')],
-  ], filters)
+  ], advanced)
   const sort = select(text('排序', 'Sort'), [
     ['newest', text('最近更新', 'Newest first')], ['oldest', text('最早更新', 'Oldest first')],
     ['largest', text('占用最大', 'Largest first')], ['title', text('标题', 'Title')],
-  ], filters)
-  const older = number(text('距今至少多少天', 'At least days old'), 0, filters)
-  const minimum = number(text('至少占用 MiB', 'Minimum MiB'), 0, filters)
+  ], advanced)
+  const older = number(text('距今至少多少天', 'At least days old'), 0, advanced)
+  const minimum = number(text('至少占用 MiB', 'Minimum MiB'), 0, advanced)
+  const reset = button(text('重置筛选', 'Reset filters'), () => {
+    search.value = ''; workspace.value = ''; source.value = ''; status.value = ''
+    sort.value = 'newest'; older.value = '0'; minimum.value = '0'
+    selected.clear(); retention = null; page = 0; render(); search.focus()
+  })
+  filterTools.append(advancedToggle, reset)
   const rules = node('details', undefined, 'dshdc-rules')
   rules.append(node('summary', text('按保留规则修剪', 'Prune with retention rules')))
   const ruleFields = node('div', undefined, 'dshdc-filters')
   const keep = number(text('每个工作区保留最近条数', 'Keep newest per workspace'), 10, ruleFields)
   const days = number(text('只修剪早于多少天的记录', 'Only prune records older than days'), 30, ruleFields)
   const ruleHint = node('p', text(
-    '在当前筛选范围内生成候选，保留条数按整个工作区计算。始终排除置顶、已加载、记录缺失及时间未知的会话。预览不会修改数据。',
-    'Generate candidates within these filters; retention counts the whole workspace. Pinned, loaded, missing and unknown-date records are protected. Preview changes no data.'))
+    '在当前筛选范围内生成候选，保留条数按各来源的整个工作区计算。排除置顶、进行中、无法安全释放、记录缺失及时间未知的会话。预览不会修改数据。',
+    'Generate candidates within these filters; retention counts each source workspace. Pinned, running, unreleasable, missing and unknown-date records are protected. Preview changes no data.'))
   const prune = button(text('生成修剪候选', 'Generate pruning candidates'), () => {
     if (!keep.checkValidity() || !days.checkValidity()) { keep.reportValidity(); days.reportValidity(); return }
     retention = { keepRecent: Number(keep.value), olderDays: Number(days.value) }
     const plan = buildPrunePlan(rows, filtered(), retention)
-    selected = new Set(plan.sessions.map((row) => row.id))
+    selected = new Set(plan.sessions.filter((row) => !row.readOnly).map(sessionKey))
     page = 0
     render()
     message.textContent = text(
-      `候选 ${selected.size} 条，记录约 ${formatBytes(plan.bytes)}；保护置顶 ${plan.skipped.pinned}、已加载 ${plan.skipped.loaded}、缺失 ${plan.skipped.missing}、最近保留 ${plan.skipped.recent}、未达时间条件 ${plan.skipped.age}。请核对后预览操作。`,
-      `${selected.size} candidates, about ${formatBytes(plan.bytes)}. Protected: ${plan.skipped.pinned} pinned, ${plan.skipped.loaded} loaded, ${plan.skipped.missing} missing, ${plan.skipped.recent} retained, ${plan.skipped.age} too recent. Review before proceeding.`)
+      `候选 ${selected.size} 条，记录约 ${formatBytes(plan.bytes)}；置顶 ${plan.skipped.pinned}、进行中或受保护 ${plan.skipped.loaded}、缺失 ${plan.skipped.missing}、最近保留 ${plan.skipped.recent}、未达时间条件 ${plan.skipped.age}。请核对后预览操作。`,
+      `${selected.size} candidates, about ${formatBytes(plan.bytes)}. Protected: ${plan.skipped.pinned} pinned, ${plan.skipped.loaded} running or protected, ${plan.skipped.missing} missing, ${plan.skipped.recent} retained, ${plan.skipped.age} too recent. Review before proceeding.`)
   })
   rules.append(ruleFields, ruleHint, prune)
   const toolbar = node('div', undefined, 'dshdc-batch-tools')
   const selectPage = button(text('选择本页', 'Select page'), () => {
     retention = null
-    for (const row of filtered().slice(page * pageSize, (page + 1) * pageSize)) selected.add(row.id)
+    for (const row of filtered().slice(page * pageSize, (page + 1) * pageSize)) if (!row.readOnly) selected.add(sessionKey(row))
     render()
   })
   const selectAll = button(text('选择全部筛选结果', 'Select all filtered'), () => {
     retention = null
-    selected = new Set(filtered().map((row) => row.id)); render()
+    selected = new Set(filtered().filter((row) => !row.readOnly).map(sessionKey)); render()
   })
   const clear = button(text('清空选择', 'Clear selection'), () => { selected.clear(); retention = null; render() })
   const selectedCount = node('span')
@@ -191,7 +272,7 @@ function showConversationManager(services) {
   backup.type = 'checkbox'
   backup.checked = true
   const backupField = field(text('删除前备份', 'Back up before deleting'), backup, operations)
-  const preview = button(text('预览所选操作', 'Preview selected action'), () => previewBatch())
+  const preview = button(text('预览所选操作', 'Preview selected action'), () => previewBatch(), 'dshdc-primary')
   const stop = button(text('停止后续任务', 'Stop remaining tasks'), () => {
     stopped = true; stop.disabled = true
     message.textContent = text('正在等待当前请求完成，之后停止。', 'Waiting for the current request, then stopping.')
@@ -199,13 +280,14 @@ function showConversationManager(services) {
   stop.hidden = true
   operations.append(preview, stop)
   const hint = node('p', text(
-    '更改筛选会清空选择。批量删除始终跳过置顶和已加载会话。归档保留记录但会取消置顶；取消归档不会恢复置顶。',
-    'Changing filters clears selection. Batch deletion always skips pinned and loaded sessions. Archiving keeps records and removes pins; unarchiving does not restore pins.'), 'dshdc-hint')
-  const message = node('p')
+    '更改筛选会清空选择。批量删除跳过置顶、进行中和无法安全释放的会话。归档保留记录但会取消置顶；取消归档不会恢复置顶。',
+    'Changing filters clears selection. Batch deletion skips pinned, running and unreleasable sessions. Archiving keeps records and removes pins; unarchiving does not restore pins.'), 'dshdc-hint')
+  const message = node('div')
   message.id = 'dshdc-manager-notice'
   message.setAttribute('role', 'status')
   message.setAttribute('aria-live', 'polite')
   const records = node('div')
+  records.setAttribute('role', 'list')
   const pagination = node('div', undefined, 'dshdc-batch-tools')
   const previous = button(text('上一页', 'Previous'), () => { page--; render() })
   const next = button(text('下一页', 'Next'), () => { page++; render() })
@@ -214,11 +296,13 @@ function showConversationManager(services) {
   const results = node('div')
   results.id = 'dshdc-results'
   results.tabIndex = -1
-  dialog.append(actions, stats, filters, rules, toolbar, operations, hint, message, records, pagination, results)
+  const body = node('div', undefined, 'dshdc-manager-body')
+  body.append(stats, sourceTools, sourcePanel, filters, filterTools, advanced, rules, toolbar, hint, message, records, pagination, results)
+  dialog.append(actions, body, operations)
 
   function filtered() {
     return filterSessions(rows.map((row) => ({ ...row, title: row.title || t('manage.untitled') })), {
-      query: search.value, workspace: workspace.value, status: status.value,
+      query: search.value, workspace: workspace.value, source: source.value, status: status.value,
       sort: sort.value, olderDays: Number(older.value), minMiB: Number(minimum.value),
     })
   }
@@ -234,16 +318,18 @@ function showConversationManager(services) {
     records.replaceChildren()
     for (const row of visible.slice(page * pageSize, (page + 1) * pageSize)) {
       const item = node('div', undefined, 'dshdc-record')
+      item.setAttribute('role', 'listitem')
       item.dataset.sessionId = row.id
+      item.dataset.sourceId = row.sourceId || 'local'
       const checkbox = node('input')
       checkbox.type = 'checkbox'
-      checkbox.checked = selected.has(row.id)
-      checkbox.disabled = busy
+      checkbox.checked = selected.has(sessionKey(row))
+      checkbox.disabled = busy || row.readOnly
       checkbox.setAttribute('aria-label', text(`选择 ${row.title}`, `Select ${row.title}`))
       checkbox.addEventListener('change', () => {
         retention = null
-        if (checkbox.checked) selected.add(row.id)
-        else selected.delete(row.id)
+        if (checkbox.checked) selected.add(sessionKey(row))
+        else selected.delete(sessionKey(row))
         selectedCount.textContent = text(`筛选 ${visible.length} · 已选 ${selected.size}`, `${visible.length} filtered · ${selected.size} selected`)
         preview.disabled = selected.size === 0 || map.managementVersion !== 1
       })
@@ -253,19 +339,30 @@ function showConversationManager(services) {
       const date = row.mtime > 0 ? new Date(row.mtime).toLocaleString() : text('更新时间未知', 'Unknown update time')
       label.append(node('strong', row.title), node('div', `${row.workspace} · ${formatBytes(row.bytes)} · ${date}`),
         node('small', row.id))
+      if (map.sources?.length > 1) label.append(node('small', row.sourceHome, 'dshdc-source-path'))
       const badges = [
         row.archived && text('已归档', 'Archived'), row.pinned && text('已置顶', 'Pinned'),
         row.running && t('manage.running'), row.missing && t('manage.missing'),
+        row.releasable && text('已打开 · 空闲可删除', 'Opened · Idle and deletable'),
+        row.readOnly && text('未连接宿主 · 仅查看', 'Host disconnected · View only'),
       ].filter(Boolean)
       if (badges.length) label.append(node('div', badges.join(' · '), 'dshdc-badges'))
       const remove = button(t('btn.aria'), async () => {
-        if (await deleteOne(row.id, remove)) {
-          rows = rows.filter((entry) => entry.id !== row.id)
-          selected.delete(row.id)
-          if (!closed) { const feedback = message.textContent; render(); message.textContent = feedback; search.focus() }
+        if (busy) return
+        busy = true
+        setBusyControls()
+        try {
+          if (await deleteOne(row.id, remove, row.sourceId || 'local')) {
+            rows = rows.filter((entry) => sessionKey(entry) !== sessionKey(row))
+            selected.delete(sessionKey(row))
+          }
+        } finally {
+          busy = false
+          if (!closed) { setBusyControls(); render(); search.focus() }
         }
       }, 'dshdc-danger')
-      remove.disabled = busy || ((row.running || (map.canDetectRunning === false && !row.missing)) && map.config?.allowRunning !== true)
+      remove.disabled = busy || row.running || row.readOnly
+      if (remove.disabled) remove.title = row.readOnly ? text('请先连接此路径的宿主', 'Connect this path to its host first') : t('manage.running')
       item.append(selectionTarget, label, remove)
       records.append(item)
     }
@@ -274,7 +371,9 @@ function showConversationManager(services) {
     previous.disabled = busy || page === 0
     next.disabled = busy || page + 1 === pages
     preview.disabled = busy || selected.size === 0 || map.managementVersion !== 1
-    for (const option of operation.options) option.disabled = option.value !== 'delete' && !map.actions?.includes(option.value)
+    const operationRows = selected.size ? rows.filter((row) => selected.has(sessionKey(row))) : rows
+    for (const option of operation.options) option.disabled = option.value !== 'delete' &&
+      !operationRows.some((row) => !row.readOnly && (row.actions || map.actions)?.includes(option.value))
     if (operation.selectedOptions[0]?.disabled) operation.value = 'delete'
     backup.disabled = busy || map.config?.backup === true
     if (map.config?.backup === true) backup.checked = true
@@ -282,13 +381,55 @@ function showConversationManager(services) {
   }
 
   async function load() {
-    refresh.disabled = true
+    if (loading) return
+    loading = true
+    setBusyControls()
     message.textContent = t('manage.loading')
     try {
       map = await loadSessions()
       if (closed) return
       rows = map.sessions || []
-      selected = new Set([...selected].filter((id) => rows.some((row) => row.id === id)))
+      sourceList.replaceChildren()
+      for (const entry of map.sources || []) {
+        const item = node('div', undefined, 'dshdc-source-row')
+        const description = node('div')
+        description.append(node('strong', entry.name), node('small', entry.home),
+          node('small', entry.error || (entry.connected ? text('已连接宿主', 'Host connected') : text('仅查看 · 可填写宿主地址启用操作', 'View only · Add host URL to enable actions'))))
+        item.append(description)
+        if (entry.id !== 'local') {
+          item.append(button(text('编辑', 'Edit'), () => {
+            if (busy || loading) return
+            editingSource = true
+            sourceHome.readOnly = true
+            cancelEdit.hidden = false
+            sourceName.value = entry.name; sourceHome.value = entry.home
+            sourceEndpoint.placeholder = text('留空保留现有连接', 'Leave empty to keep the connection')
+            sourceEndpoint.value = ''; sourceEndpoint.focus()
+          }))
+          item.append(button(text('移除来源', 'Remove source'), async () => {
+            if (busy || loading) return
+            busy = true
+            setBusyControls()
+            try {
+              await request(`${apiBase}/sources`, { method: 'DELETE', headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ sourceId: entry.id }) })
+              await load()
+            } catch (error) { sourceFeedback.textContent = error.message }
+            finally {
+              busy = false
+              if (!closed) { setBusyControls(); render() }
+            }
+          }))
+        }
+        sourceList.append(item)
+      }
+      selected = new Set([...selected].filter((id) => rows.some((row) => sessionKey(row) === id)))
+      const oldSource = source.value
+      source.replaceChildren()
+      for (const entry of [{ id: '', name: text('全部路径', 'All paths') }, ...(map.sources || [])]) {
+        const option = node('option', entry.name); option.value = entry.id; source.append(option)
+      }
+      source.value = (map.sources || []).some((entry) => entry.id === oldSource) ? oldSource : ''
       const oldWorkspace = workspace.value
       workspace.replaceChildren()
       const choices = new Map([['', text('全部工作区', 'All workspaces')]])
@@ -297,20 +438,22 @@ function showConversationManager(services) {
         const option = node('option', caption); option.value = value; workspace.append(option)
       }
       workspace.value = choices.has(oldWorkspace) ? oldWorkspace : ''
-      const visibleIds = new Set(filtered().map((row) => row.id))
+      const visibleIds = new Set(filtered().map(sessionKey))
       selected = new Set([...selected].filter((id) => visibleIds.has(id)))
       render()
-      message.textContent = map.managementVersion !== 1 ? t('state.hostOutdated')
-        : map.canDetectRunning === false ? t('manage.unknown') : ''
+      message.textContent = [map.managementVersion !== 1 ? t('state.hostOutdated')
+        : map.canDetectRunning === false ? t('manage.unknown') : '',
+      ...(map.sources || []).filter((entry) => entry.error).map((entry) => `${entry.name}: ${entry.error}`)].filter(Boolean).join('\n')
     } catch (error) {
       if (!closed) message.textContent = `${t('state.failed')}: ${error.message}`
     } finally {
-      refresh.disabled = busy
+      loading = false
+      if (!closed) { setBusyControls(); render() }
     }
   }
 
   async function previewBatch() {
-    if (busy || !selected.size || !beginBatch()) return
+    if (busy || loading || !selected.size || !beginBatch()) return
     busy = true
     stopped = false
     setBusyControls()
@@ -321,9 +464,10 @@ function showConversationManager(services) {
       if (map.managementVersion !== 1) throw new Error(t('state.hostOutdated'))
       const action = operation.value
       const targets = (retention ? buildPrunePlan(rows, filtered(), retention).sessions : filtered())
-        .filter((row) => selected.has(row.id))
-      const eligible = targets.filter((row) => action !== 'delete' ||
-        (!row.pinned && !row.running && (row.missing || map.canDetectRunning !== false)))
+        .filter((row) => selected.has(sessionKey(row)))
+      const eligible = targets.filter((row) => !row.readOnly && (action === 'delete'
+        ? !row.pinned && !row.running
+        : (row.actions || map.actions)?.includes(action)))
       const skipped = selected.size - eligible.length
       if (!eligible.length) {
         message.textContent = text('所选会话均已消失或受到保护，没有可执行目标。', 'All selected records are gone or protected; nothing to execute.')
@@ -344,11 +488,11 @@ function showConversationManager(services) {
             method: action === 'delete' ? 'DELETE' : 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(action === 'delete'
-              ? { sessionId: row.id, backup: useBackup, protectPinned: true, expectedMtime: row.mtime, expectedRevision: row.revision }
-              : { sessionId: row.id, action }),
+              ? { sessionId: row.id, sourceId: row.sourceId, backup: useBackup, protectPinned: true, expectedMtime: row.mtime, expectedRevision: row.revision }
+              : { sessionId: row.id, sourceId: row.sourceId, action }),
           })
           outcomes.push({ row, state: 'success', detail: response.backupDir ? `${t('manage.backup')}${response.backupDir}` : '' })
-          selected.delete(row.id)
+          selected.delete(sessionKey(row))
         } catch (error) {
           const unknown = error.outcomeUnknown === true || error.name === 'AbortError'
           outcomes.push({ row, state: unknown ? 'unknown' : 'failed', detail: [
@@ -366,7 +510,7 @@ function showConversationManager(services) {
       for (const outcome of outcomes) {
         const state = outcome.state === 'success' ? text('成功', 'Succeeded')
           : outcome.state === 'unknown' ? text('结果未知', 'Outcome unknown') : text('失败', 'Failed')
-        results.append(node('p', `${state} · ${outcome.row.title || outcome.row.id}\n${outcome.row.id}${outcome.detail ? `\n${outcome.detail}` : ''}`))
+        results.append(node('p', `${state} · ${outcome.row.title || outcome.row.id}\n${outcome.row.id}${outcome.row.sourceHome ? `\n${outcome.row.sourceHome}` : ''}${outcome.detail ? `\n${outcome.detail}` : ''}`))
       }
       const summary = text(
         `${label}完成：成功 ${successful}，失败 ${failed}，跳过 ${skipped}，未执行 ${unfinished}${unknown ? `，结果未知 ${unknown}` : ''}。`,
@@ -396,7 +540,7 @@ function showConversationManager(services) {
       ? text('已开启备份。备份会占用磁盘，本次释放空间可能少于记录大小；恢复仍需离线手动操作。', 'Backup is enabled and uses disk space; reclaimed space may be smaller. Restoration is manual and offline.')
       : text('未开启备份。删除本地记录后无法通过插件撤销。', 'Backup is off. Deleted local records cannot be undone through this plugin.')))
     const list = node('div', undefined, 'dshdc-preview-list')
-    for (const row of targets) list.append(node('p', `${row.title || t('manage.untitled')}\n${row.workspace} · ${row.id}`))
+    for (const row of targets) list.append(node('p', `${row.title || t('manage.untitled')}\n${row.workspace} · ${row.id}${row.sourceHome ? `\n${row.sourceHome}` : ''}`))
     previewDialog.append(list)
     const controls = node('div', undefined, 'dshdc-actions')
     return new Promise((resolve) => {
@@ -418,10 +562,12 @@ function showConversationManager(services) {
   }
 
   function setBusyControls() {
-    for (const element of dialog.querySelectorAll('input, select, button')) element.disabled = busy
-    stop.disabled = false
+    dialog.setAttribute('aria-busy', String(busy || loading))
+    for (const element of dialog.querySelectorAll('input, select, button')) element.disabled = busy || loading
+    close.disabled = busy
+    stop.disabled = stopped || loading
   }
-  for (const element of filters.querySelectorAll('input, select')) {
+  for (const element of [...filters.querySelectorAll('input, select'), ...advanced.querySelectorAll('input, select')]) {
     element.addEventListener(element === search ? 'input' : 'change', () => {
       selected.clear(); retention = null; page = 0; render()
     })
@@ -503,11 +649,11 @@ const zh = {
   'manage.empty': '没有匹配的对话',
   'manage.loading': '正在读取对话…',
   'manage.untitled': '无标题对话',
-  'manage.running': '正在运行或已加载',
+  'manage.running': '进行中或受保护',
   'manage.cancel': '取消',
   'manage.delete': '确认删除',
   'manage.backup': '备份位置：',
-  'manage.unknown': '无法检测运行状态，删除已禁用。请检查宿主服务后刷新。',
+  'manage.unknown': '运行检测不可用，删除时仍会校验宿主写入锁。',
   'manage.missing': '本地记录已缺失，可清理残留索引',
   'manage.count': '{count} 个对话',
   'confirm.missing': '将从会话列表清理 {id} 的残留索引。本地记录已不存在。',
@@ -537,11 +683,11 @@ const en = {
   'manage.empty': 'No matching conversations',
   'manage.loading': 'Loading conversations…',
   'manage.untitled': 'Untitled conversation',
-  'manage.running': 'Running or loaded',
+  'manage.running': 'Running or protected',
   'manage.cancel': 'Cancel',
   'manage.delete': 'Delete conversation',
   'manage.backup': 'Backup location: ',
-  'manage.unknown': 'Activity detection is unavailable. Restore the host service and refresh.',
+  'manage.unknown': 'Activity detection is unavailable. Deletion will still check host write ownership.',
   'manage.missing': 'Local record missing; remove stale list entries',
   'manage.count': '{count} conversations',
   'confirm.missing': 'Remove stale list entries for {id}. The local record is already missing.',
@@ -622,6 +768,7 @@ async function requestJson(url, init = {}) {
       const error = new Error(data?.error || `${response.status} ${response.statusText || ''}`)
       error.status = response.status
       error.definitive = true
+      error.outcomeUnknown = data?.outcomeUnknown === true
       error.partial = data?.partial
       error.backupDir = data?.backupDir
       throw error
@@ -641,14 +788,17 @@ async function refreshTitleMap(force = false) {
     return titleMap
   }
   if (titleRequest) return titleRequest
-  titleRequest = (async () => {
+  const generation = clientGeneration
+  const pending = (async () => {
     const data = await requestJson(`${API_BASE}/sessions`)
+    if (generation !== clientGeneration) return titleMap
     if (data.apiVersion !== 1) throw new Error(currentT('state.hostOutdated'))
     const rows = Array.isArray(data?.sessions) ? data.sessions : []
     const backupOn = data?.config ? data.config.backup === true : undefined
     if (backupOn !== undefined) window.__dshdcBackupOn = backupOn
     const byTitle = new Map()
     for (const row of rows) {
+      if (row.sourceId && row.sourceId !== 'local') continue
       if (!row?.id || !row.title) continue
       const key = normalizeTitle(row.title)
       // Duplicates remain explicitly ambiguous, including the third occurrence.
@@ -656,13 +806,14 @@ async function refreshTitleMap(force = false) {
     }
     titleMap = { byTitle, fetchedAt: now, sessions: rows, config: data.config || {},
       canDetectRunning: data.canDetectRunning, hostVersion: data.version, actions: data.actions || [],
-      managementVersion: data.managementVersion }
+      managementVersion: data.managementVersion, sources: data.sources || [] }
     return titleMap
   })()
+  titleRequest = pending
   try {
-    return await titleRequest
+    return await pending
   } finally {
-    titleRequest = null
+    if (titleRequest === pending) titleRequest = null
   }
 }
 
@@ -787,7 +938,7 @@ function ensureLayer() {
   const style = document.createElement('style')
   style.id = 'dshdc-style'
   style.textContent = `
-#${LAYER_ID}, .dshdc-native-del {
+#${LAYER_ID}, .dshdc-native-del, .dshdc-sidebar-manage {
   --dshdc-surface: var(--dsw-alias-bg-layer-2, Canvas);
   --dshdc-text: var(--dsw-alias-label-primary, CanvasText);
   --dshdc-muted: var(--dsw-alias-label-secondary, GrayText);
@@ -829,10 +980,18 @@ function ensureLayer() {
 .dshdc-native-del:hover { color:var(--dshdc-danger) !important; background:var(--dshdc-danger-hover) !important; }
 .dshdc-native-del:focus-visible { outline:var(--dsw-focus-ring-width, 2px) solid var(--dshdc-focus); outline-offset:2px; }
 .dshdc-native-del:disabled { opacity:.5; cursor:wait !important; }
-#dshdc-manage { all:unset; position:fixed; right:16px; bottom:16px; pointer-events:auto;
+#dshdc-manage { all:unset; position:fixed; left:12px; bottom:64px; pointer-events:auto;
   padding:10px 14px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px); cursor:pointer;
   background:var(--dshdc-surface); color:var(--dshdc-text); font:inherit; }
 #dshdc-manage:hover { background:var(--dshdc-hover); }
+#dshdc-manage[hidden] { display:none; }
+.dshdc-sidebar-manage { display:flex; align-items:center; justify-content:center; gap:10px;
+  box-sizing:border-box; min-height:44px; width:100%; padding:10px 12px;
+  border:0; border-radius:var(--dsw-radius-md,8px); background:transparent;
+  color:var(--dshdc-text); cursor:pointer; font:inherit; white-space:nowrap; }
+.dshdc-sidebar-manage:hover { background:var(--dshdc-hover); }
+.dshdc-sidebar-manage:focus-visible { outline:2px solid var(--dshdc-focus); outline-offset:-2px; }
+.dshdc-sidebar-manage:active { background:var(--dshdc-active); }
 .dshdc-dialog { color-scheme:inherit; box-sizing:border-box; width:min(640px, calc(100vw - 32px));
   max-height:80vh; padding:24px; border:0; border-radius:var(--dsw-radius-panel, 12px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
@@ -850,11 +1009,11 @@ function ensureLayer() {
   background:transparent; color:var(--dshdc-text); border-radius:var(--dsw-radius-md, 6px); cursor:pointer; font:inherit; }
 .dshdc-dialog button:hover:not(:disabled) { background:var(--dshdc-hover); }
 .dshdc-dialog button:active:not(:disabled) { background:var(--dshdc-active); }
-.dshdc-dialog button:disabled { opacity:.55; cursor:wait; }
+.dshdc-dialog button:disabled { opacity:.55; cursor:not-allowed; }
 .dshdc-dialog :is(button, input, select, summary):focus-visible, #dshdc-manage:focus-visible {
   outline:var(--dsw-focus-ring-width, 2px) solid var(--dshdc-focus); outline-offset:2px; }
 .dshdc-actions { display:flex; justify-content:flex-end; gap:12px; flex-wrap:wrap; margin-top:20px; }
-#dshdc-manager > .dshdc-actions { position:sticky; top:-24px; padding:12px 0;
+#dshdc-manager > .dshdc-actions { flex-shrink:0; padding:4px 0 12px;
   background:var(--dshdc-surface); z-index:1; margin-top:0; }
 #dshdc-manager > .dshdc-actions h2 { margin:0 auto 0 0; align-self:center; }
 .dshdc-dialog button.dshdc-danger { border-color:var(--dshdc-danger); color:var(--dshdc-danger); }
@@ -862,9 +1021,24 @@ function ensureLayer() {
 .dshdc-record { display:flex; align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--dshdc-border); }
 .dshdc-record-text { flex:1; min-width:0; overflow-wrap:anywhere; white-space:pre-wrap; }
 #dshdc-manager-notice { color:var(--dshdc-muted); white-space:pre-wrap; }
-#dshdc-manager { width:min(1040px, calc(100vw - 32px)); }
+#dshdc-manager { width:min(1040px, calc(100vw - 32px)); max-height:90vh; }
+#dshdc-manager[open] { display:flex; flex-direction:column; overflow:hidden; }
+.dshdc-manager-body { min-height:0; overflow:auto; padding:4px; margin-inline:-4px; }
 .dshdc-summary { font-weight:600; }
-.dshdc-filters { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.dshdc-summary { padding:12px 16px; margin:4px 0 12px; border:1px solid var(--dshdc-border);
+  border-radius:var(--dsw-radius-md,8px); background:var(--dsw-alias-bg-layer-1,Field); }
+.dshdc-source-tools { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
+.dshdc-source-tools > span { font-size:13px; color:var(--dshdc-muted); }
+.dshdc-source-panel { padding:16px; margin-block:16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md,8px); }
+.dshdc-source-panel h3 { margin:0 0 8px; font-size:16px; }
+.dshdc-source-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px 0; border-bottom:1px solid var(--dshdc-border); }
+.dshdc-source-row > div { flex:1; min-width:160px; overflow-wrap:anywhere; }
+.dshdc-source-row small { display:block; color:var(--dshdc-muted); }
+.dshdc-source-panel form { margin-top:16px; }
+.dshdc-dialog button.dshdc-primary { background:var(--dshdc-focus); color:var(--dsw-alias-label-on-color,HighlightText); border-color:transparent; }
+.dshdc-dialog button.dshdc-primary:hover:not(:disabled) { background:color-mix(in srgb,var(--dshdc-focus) 85%,var(--dshdc-text)); }
+.dshdc-filters { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+.dshdc-filter-tools { display:flex; gap:8px; margin:12px 0; }
 .dshdc-field { display:flex; flex-direction:column; gap:4px; min-width:0; font-size:13px; }
 .dshdc-field :is(input, select) { margin:0; }
 .dshdc-field:has(input[type="search"]) { grid-column:span 2; }
@@ -877,6 +1051,8 @@ function ensureLayer() {
 .dshdc-rules summary { cursor:pointer; padding:6px 0; }
 .dshdc-rules .dshdc-filters { margin-top:12px; }
 .dshdc-batch-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.dshdc-batch-tools:has(.dshdc-primary) { flex-shrink:0; padding:12px 0 0; margin-bottom:0;
+  background:var(--dshdc-surface); border-top:1px solid var(--dshdc-border); }
 .dshdc-batch-tools .dshdc-field { min-width:120px; }
 .dshdc-hint, .dshdc-rules p { font-size:13px; color:var(--dshdc-muted); }
 .dshdc-preview-list { max-height:35vh; overflow:auto; overflow-wrap:anywhere; white-space:pre-wrap; border-block:1px solid var(--dshdc-border); }
@@ -887,7 +1063,9 @@ function ensureLayer() {
   .dshdc-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .dshdc-record { gap:10px; }
   .dshdc-record > button { padding:8px; }
-  #dshdc-manager > .dshdc-actions { top:-16px; }
+  #dshdc-manager > .dshdc-actions { gap:8px; }
+  #dshdc-manager > .dshdc-actions button { padding:8px; }
+  .dshdc-source-tools { align-items:flex-start; flex-direction:column; }
 }
 #dshdc-notice { position:fixed; right:16px; bottom:72px; max-width:min(480px, calc(100vw - 32px));
   padding:12px 40px 12px 16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px);
@@ -936,23 +1114,13 @@ function ensureButton(layer, onClick) {
 
 // ---------------------------------------------------------------- 删除
 
-/**
- * 顶部/底部提示条。
- *
- * 历史 bug：只 set textContent，既没有超时也没有关闭按钮 —— 一旦出现
- * 「删除失败: …」，它就**永久钉在屏幕上**，连后续成功也不会让它消失。
- *
- * 现在：
- *   - 忙时（deleting）用 sticky，等结果来替换；
- *   - 成功 6 秒自动消失；
- *   - 失败 12 秒自动消失，并且始终带一个 × 可以立刻关掉。
- */
+/** Busy notices remain until replaced; results can be dismissed or expire. */
 let noticeTimer = 0
 
 function dismissNotice() {
   clearTimeout(noticeTimer)
   noticeTimer = 0
-  const el = document.getElementById('dshdc-notice') || document.getElementById('dshdc-manager-notice')
+  const el = document.getElementById('dshdc-notice')
   if (el) {
     el.textContent = ''
     el.hidden = true
@@ -966,7 +1134,12 @@ function notify(message, { tone = 'info', timeout } = {}) {
     notice.id = 'dshdc-notice'
     notice.setAttribute('role', 'status')
     notice.setAttribute('aria-live', 'polite')
-    document.getElementById(LAYER_ID)?.appendChild(notice)
+  }
+  // Modal dialogs make everything outside them inert, including close buttons.
+  const parent = document.getElementById('dshdc-manager-notice') || document.getElementById(LAYER_ID)
+  if (notice.parentElement !== parent) {
+    if (parent?.id === 'dshdc-manager-notice') parent.textContent = ''
+    parent?.appendChild(notice)
   }
   notice.hidden = false
   notice.dataset.tone = tone
@@ -1018,10 +1191,11 @@ let dialogCount = 0
 let confirmation = null
 let disposeManager = null
 const pendingDeletes = new Set()
+let clientGeneration = 0
 
 function confirmDeletion(sessionId, row) {
   const t = currentT
-  const backupOn = titleMap.config?.backup === true
+  const backupOn = titleMap.config?.backup === true || row?.backup === true
   const body = (row?.missing ? t('confirm.missing') : backupOn ? t('confirm.bodyBackup') : t('confirm.body')).replace('{id}', sessionId)
   const dialog = createDialog(t('confirm.title'))
   if (typeof dialog.showModal !== 'function') {
@@ -1029,7 +1203,7 @@ function confirmDeletion(sessionId, row) {
     return Promise.resolve(window.confirm(`${t('confirm.title')}\n\n${row?.title || ''}\n${body}`))
   }
   const detail = document.createElement('p')
-  detail.textContent = [row?.title || t('manage.untitled'), row?.workspace, body].filter(Boolean).join('\n')
+  detail.textContent = [row?.title || t('manage.untitled'), row?.workspace, row?.sourceHome, body].filter(Boolean).join('\n')
   dialog.appendChild(detail)
   const actions = document.createElement('div')
   actions.className = 'dshdc-actions'
@@ -1067,45 +1241,50 @@ async function refreshSessionLists(deletedId) {
   return refreshTitleMap(true)
 }
 
-async function askThenDelete(sessionId, btn) {
+async function askThenDelete(sessionId, btn, sourceId = 'local') {
   const t = currentT
+  const generation = clientGeneration
   if (pendingDeletes.size || confirmation) return false
   pendingDeletes.add(sessionId)
   btn.disabled = true
   try {
     // Revalidate the target and effective backup setting before confirmation.
     const map = await refreshTitleMap(true)
-    const row = map.sessions?.find((item) => item.id === sessionId)
+    if (generation !== clientGeneration) return false
+    const row = map.sessions?.find((item) => item.id === sessionId && (item.sourceId || 'local') === sourceId)
+    if (row?.readOnly) throw new Error('请先在路径设置中连接此目录所属的 DSH 宿主')
     // 注意：这里**不再**因为 canDetectRunning=false 就拒绝。
     // 0.4.3 会因此直接抛错，导致宿主没暴露 agents 服务时「什么都删不掉」。
     // 真正能不能删，交给 host 的写入所有权判定（409 会带回明确原因）。
-    if (!await confirmDeletion(sessionId, row)) return false
+    if (!await confirmDeletion(sessionId, row) || generation !== clientGeneration) return false
     btn.dataset.dshdcState = 'deleting'
     btn.title = t('state.deleting')
     notify(t('state.deleting'), { tone: 'busy' })
     const data = await requestJson(`${API_BASE}/sessions`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId }),
+      body: JSON.stringify({ sessionId, ...(sourceId !== 'local' ? { sourceId } : {}) }),
     })
+    if (generation !== clientGeneration) return false
     btn.dataset.dshdcState = 'done'
     btn.title = data && data.alreadyGone ? t('state.gone') : t('state.done')
     notify(`${btn.title}${data.backupDir ? `\n${t('manage.backup')}${data.backupDir}` : ''}`, { tone: 'done' })
     try {
-      await refreshSessionLists(sessionId)
+      await refreshSessionLists(sourceId === 'local' ? sessionId : undefined)
     } catch {
-      notify(t('state.refreshFailed'), { tone: 'error' })
+      if (generation === clientGeneration) notify(t('state.refreshFailed'), { tone: 'error' })
     }
     btn.dataset.dshdcVisible = '0'
     return true
   } catch (error) {
+    if (generation !== clientGeneration) return false
     const msg = String((error && error.message) || error)
     btn.dataset.dshdcState = 'failed'
     btn.title = error.name === 'AbortError' ? t('state.timeout') : error.outcomeUnknown ? t('state.unknown') : `${t('state.failed')}: ${msg}`
     notify(`${btn.title}${error.partial ? `\n${t('state.partial')}` : ''}${error.backupDir ? `\n${t('manage.backup')}${error.backupDir}` : ''}`, { tone: 'error' })
     return false
   } finally {
-    pendingDeletes.delete(sessionId)
+    if (generation === clientGeneration) pendingDeletes.delete(sessionId)
     btn.disabled = false
   }
 }
@@ -1113,16 +1292,22 @@ async function askThenDelete(sessionId, btn) {
 function openManager() {
   const existing = document.getElementById('dshdc-manager')
   if (existing) { existing.focus(); return }
+  const generation = clientGeneration
   disposeManager = showConversationManager({
     createDialog, t: currentT, loadSessions: refreshSessionLists, deleteOne: askThenDelete,
     request: requestJson, apiBase: API_BASE,
     beginBatch: () => {
-      if (pendingDeletes.size || confirmation) return false
+      if (generation !== clientGeneration || pendingDeletes.size || confirmation) return false
       pendingDeletes.add('batch')
       return true
     },
-    endBatch: () => pendingDeletes.delete('batch'),
+    endBatch: () => {
+      if (generation === clientGeneration) pendingDeletes.delete('batch')
+    },
   })
+  const notice = document.getElementById('dshdc-notice')
+  const manager = document.getElementById('dshdc-manager')
+  if (notice && manager) manager.appendChild(notice)
 }
 
 // ---------------------------------------------------------------- 诊断上报
@@ -1155,6 +1340,7 @@ const inject = ['locale']
 
 function apply(ctx) {
   if (typeof document === 'undefined' || !document.body) return
+  const generation = ++clientGeneration
 
   if (ctx?.locale && typeof ctx.locale.register === 'function') {
     ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chat-prune: dictionaries')
@@ -1173,6 +1359,8 @@ function apply(ctx) {
   const manage = document.createElement('button')
   manage.id = 'dshdc-manage'
   manage.textContent = currentT('manage.title')
+  manage.hidden = window.__dshChatPruneManagerSlotReady__ === true
+  manage.setAttribute('aria-haspopup', 'dialog')
   manage.addEventListener('click', openManager)
   layer.appendChild(manage)
 
@@ -1365,6 +1553,14 @@ function apply(ctx) {
   ctx.effect(
     () => () => {
       disposed = true
+      if (generation === clientGeneration) {
+        clientGeneration++
+        pendingDeletes.clear()
+        titleRequest = null
+        titleMap = { byTitle: new Map(), fetchedAt: 0, sessions: [], config: {} }
+        delete window.__dshdcBackupOn
+      }
+      dismissNotice()
       confirmation?.()
       disposeManager?.()
       disposeManager = null
