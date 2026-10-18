@@ -22,10 +22,12 @@
     "./client": "./client-slot.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
   },
   "scripts": {
     "build": "node scripts/build-client.mjs",
+    "prepare": "node scripts/build-client.mjs",
     "test": "node test/all.mjs",
     "test:installed": "node test/all.mjs --installed",
     "test:browser": "node scripts/build-client.mjs && node test/browser-e2e.mjs && node test/manager-e2e.mjs",
@@ -59,6 +61,7 @@
     }
   },
   "license": "MIT",
+  "icon": "./assets/icon.svg",
   "files": [
     "lib",
     "client.js",
