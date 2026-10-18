@@ -1,12 +1,38 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply, listSessions } from '../lib/index.js'
 import { createSessionSources } from '../lib/session-sources.js'
 import { buildPrunePlan, filterSessions, sessionKey } from '../lib/pruning-policy.js'
+
+test('source verification accepts a host reporting an alias of the same data directory', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-source-alias-'))
+  const home = join(root, 'local'), remoteHome = join(root, 'remote'), alias = join(root, 'remote-alias')
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, home: alias }))
+  })
+  t.after(async () => {
+    await new Promise((resolve) => { server.closeAllConnections(); server.close(resolve) })
+    await rm(root, { recursive: true, force: true })
+  })
+  await mkdir(home)
+  await mkdir(join(remoteHome, 'sessions'), { recursive: true })
+  await symlink(remoteHome, alias, 'junction')
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const sources = createSessionSources({ home, listLocal: listSessions })
+  const source = await sources.add({
+    home: remoteHome, endpoint: `http://127.0.0.1:${server.address().port}/`,
+  })
+  assert.equal(source.connected, true)
+  const forwarded = await sources.forward(source.id, 'sessions/action', 'POST', {
+    sessionId: 'session-same', action: 'pin',
+  })
+  assert.equal(forwarded.home, alias)
+})
 
 test('multiple directories merge identical IDs and route mutations to their own host and index', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-sources-'))
