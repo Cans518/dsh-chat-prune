@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-prune",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "DSH conversation management with retention previews, batch archive and pin actions, and guarded deletion.",
   "author": "Cans518",
   "repository": {
@@ -11,7 +11,13 @@
   "bugs": {
     "url": "https://github.com/Cans518/dsh-chat-prune/issues"
   },
-  "keywords": ["dsh", "dsh-next", "plugin", "chat", "conversation"],
+  "keywords": [
+    "dsh",
+    "dsh-next",
+    "plugin",
+    "chat",
+    "conversation"
+  ],
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -41,7 +47,10 @@
     },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-ui-renderer", "@deepseek-ai/dsh-api-session-controller"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-api-session-controller"
+      ]
     },
     "manifestVersion": 1
   },

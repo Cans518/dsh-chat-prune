@@ -77,16 +77,16 @@ npm run test:install
 
 # 3. 打包
 npm pack --ignore-scripts
-#   → dsh-chat-prune-0.4.0.tgz
+#   → dsh-chat-prune-0.4.1.tgz
 
 # 4. 提交并推送
 git add -A
-git commit -m "release: v0.4.0"
+git commit -m "release: v0.4.1"
 git push origin main
 
 # 5. 打 tag + 发 Release（附件就是那个 tgz）
-gh release create v0.4.0 .\dsh-chat-prune-0.4.0.tgz `
-  --title "dsh-chat-prune v0.4.0" `
+gh release create v0.4.1 .\dsh-chat-prune-0.4.1.tgz `
+  --title "dsh-chat-prune v0.4.1" `
   --notes "会话管理：删除、筛选、批量归档/置顶、保留规则修剪，删除前确认且可选备份。"
 
 # 6. 确认 topic 还在（gh release 不会动它，但确认一下）
@@ -128,7 +128,7 @@ dshfind 要等 **02:17 UTC**（北京时间 10:17）那次同步。1024Store 的
 - [x] `files` 白名单不含测试与脚本（tarball 14 个文件）
 - [x] `npm pack` 后 `dsh plugin add <tgz>` 能自动启用并启动 Host
 
-`dsh-chat-prune-0.4.0.tgz` 实测结论：
+`dsh-chat-prune-0.4.1.tgz` 实测结论：
 
 ```
 DSH_ADD_INSTALL_PASS: automatic enablement, runtime files, actual Host boot and removal verified

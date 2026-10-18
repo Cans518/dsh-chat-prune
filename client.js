@@ -18,7 +18,7 @@
   if (typeof document === "undefined") return;
   // 防重复注入（HMR / 路由重渲染可能多次插入同一 script）
   if (window.__dshChatPruneInstalled__) return;
-  window.__dshChatPruneBuildVersion__ = "0.4.0";
+  window.__dshChatPruneBuildVersion__ = "0.4.1";
 
 // ---------- begin client-core.js ----------
 const DAY_MS = 86400000
