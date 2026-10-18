@@ -22,6 +22,7 @@ const LOGIC = [
   'exports.mjs',
   'boot-dryrun.mjs',
   'client-bundle.mjs',
+  'client-fresh.mjs',
   'client-slot.mjs',
   'review-regressions.mjs',
   'delete-safety.mjs',
