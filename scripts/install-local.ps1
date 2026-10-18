@@ -11,7 +11,7 @@ $profileRoot = [IO.Path]::GetFullPath((Join-Path $DshHome "profiles\$Profile"))
 $installedRoot = Join-Path $profileRoot 'node_modules\dsh-chat-prune'
 if (-not (Test-Path -LiteralPath (Join-Path $installedRoot 'package.json') -PathType Leaf)) {
   if (Test-Path -LiteralPath (Join-Path $profileRoot 'node_modules\dsh-delete-chat\package.json') -PathType Leaf) {
-    throw 'Legacy installation detected. Follow the 0.2.x migration instructions in README.md before using this updater.'
+    throw 'An incompatible installation is present. Install the current release using the DSH CLI before using this updater.'
   }
   throw 'No existing installation found. Use the first-install instructions in README.md.'
 }
@@ -21,8 +21,8 @@ if ('dsh-chat-prune' -notin @($profilePackage.dsh.profile.bundles)) {
 }
 $runtimeFiles = @(
   'lib/index.js', 'lib/pruning-policy.js', 'lib/agent-lifecycle.js', 'lib/session-sources.js', 'client-core.js', 'client-manager.js', 'client.js', 'client-slot.js', 'package.json',
-  'README.md', 'AUDIT.md', 'CONTRIBUTING.md', 'LICENSE',
-  'assets/icon.svg', 'docs/technical-reference.md'
+  'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'LICENSE',
+  'assets/icon.svg', 'docs/technical-reference.md', 'docs/user-guide.md', 'docs/releasing.md', 'docs/development-history.md'
 )
 foreach ($relativeFile in $runtimeFiles) {
   if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $relativeFile) -PathType Leaf)) {

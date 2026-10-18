@@ -212,6 +212,6 @@ jobs:
             '- 校验和: `SHA256SUMS.txt`',
             '',
             '商店收录（GitHub topic `dsh-plugin` 每日 02:17 UTC 同步）：',
-            ('`node publish/check-listing.mjs ' + "${{ steps.pack.outputs.name }}" + '`')
+            ('`node scripts/check-listing.mjs ' + "${{ steps.pack.outputs.name }}" + '`')
           )
           $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

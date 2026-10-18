@@ -83,7 +83,7 @@
     "LICENSE",
     "CONTRIBUTING.md",
     "README.md",
-    "AUDIT.md"
+    "CHANGELOG.md"
   ],
   "devDependencies": {
     "playwright": "^1.61.0"

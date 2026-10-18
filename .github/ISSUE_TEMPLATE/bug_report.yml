@@ -1,0 +1,40 @@
+name: 问题反馈
+description: 报告安装、界面或会话管理中的问题
+body:
+  - type: markdown
+    attributes:
+      value: 请先查看使用指南。日志和截图请去除认证地址、API Key、对话正文和个人路径。
+  - type: input
+    id: plugin_version
+    attributes:
+      label: 插件版本
+      placeholder: 例如 0.4.5
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: DSH NEXT 版本、Windows 版本及使用的 profile。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请说明从哪一步开始出现问题。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 可以附上脱敏后的错误信息或截图。
+    validations:
+      required: true

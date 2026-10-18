@@ -7,6 +7,8 @@
 建议使用 Node.js 24：
 
 ```powershell
+git clone https://github.com/Cans518/dsh-chat-prune.git
+cd dsh-chat-prune
 npm ci --legacy-peer-deps
 npm run build
 npm test
@@ -48,15 +50,14 @@ npm run test:host
 
 组合安装验收时，先执行 `npm pack`，再运行 `node test/all.mjs --installed --browser --host --install`。
 
-验证 0.2.x 改名迁移时，可将 `DSH_LEGACY_INSTALL_SPEC` 设置为本项目旧版 Release 的 `.tgz` 地址或本地路径，再运行 `npm run test:install`。该用例在独立 profile 中安装旧版、移除旧 bundle，然后安装新版并启动真实 Host，同时检查既有备份文件不受影响；不迁移用户现有安装。只验证新包时不设置此变量即可。
-
 ## 目录
 
 ```text
+.github/       CI、发布工作流与 Issue 模板
 assets/        项目图标
-docs/          技术和恢复说明
+docs/          使用指南、技术说明、发布流程与历史验证依据
 lib/           宿主服务与删除逻辑
-scripts/       构建、安装工具
+scripts/       构建、元数据校验、本地安装、重启与商店查询工具
 test/          逻辑、浏览器和宿主集成测试
 client-core.js 客户端共享逻辑
 client-manager.js 管理窗口、选择、预览和批量任务
@@ -65,6 +66,34 @@ client.js      生成的客户端脚本
 ```
 
 `lib/pruning-policy.js` 是浏览器与逻辑测试共用的纯筛选/保留规则。宿主状态变更通过 `workspaceRegistry` 的公开方法执行，删除继续持有写入所有权。不要在在线管理操作中直接重写工作区 JSON。
+
+`client.js` 是需要提交的运行产物；`node_modules/`、`.diagnostics/`、测试截图、日志和 `.tgz` 由 Git 忽略。不要把本机安装路径写进公开脚本或文档。
+
+## 从源码安装与本地更新
+
+构建并验证后，可打包并通过 DSH CLI 安装：
+
+```powershell
+npm pack --ignore-scripts
+$manifest = Get-Content package.json -Raw | ConvertFrom-Json
+$pluginPackage = (Resolve-Path "$($manifest.name)-$($manifest.version).tgz").Path
+dsh plugin --profile desktop add $pluginPackage
+```
+
+已有并启用了插件时，也可在正常退出 DSH 后使用本地更新工具：
+
+```powershell
+.\scripts\install-local.ps1 -Profile desktop -WhatIf
+.\scripts\install-local.ps1 -Profile desktop
+```
+
+工具会备份旧文件、保留插件配置并核对复制结果，不会重启 DSH。`scripts/restart-watcher.ps1` 与同目录的 `.cmd` 是可选辅助工具，只等待指定进程正常退出，再启动指定安装。
+
+## 发布
+
+更新 `package.json` 和锁文件版本、README 安装地址及 `CHANGELOG.md`，重新构建并提交 `client.js`。推送到 `main` 后，Node.js 20、24 检查均通过才会发布新版本；同一版本重复运行会跳过发布。
+
+完整步骤、附件校验与手动补发见[发布流程](./docs/releasing.md)。
 
 ## 提交建议
 

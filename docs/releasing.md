@@ -1,6 +1,8 @@
-# 发布到 DSH 插件商店
+# 发布与维护
 
-本文件记录**实测确认过**的收录规则，不是猜测。
+返回[项目首页](../README.md) · [参与贡献](../CONTRIBUTING.md)
+
+本文说明 GitHub Release 的自动发布流程，并保留 2026-10-18 核验的商店收录资料。第三方目录的规则和状态可能发生变化，发布成功不代表立即完成商店收录。
 
 ---
 
@@ -22,7 +24,7 @@
 | 仓库公开 | ✅ `https://github.com/Cans518/dsh-chat-prune` |
 | `dsh-plugin` topic | ✅ 已设置 |
 | package.json 规范 | ✅ `dsh plugin add` 真实安装通过 |
-| Release | ⬜ 待发（见下） |
+| Release | 已接入自动发布；当前版本见 [Releases](https://github.com/Cans518/dsh-chat-prune/releases/latest) |
 | 1024Store 收录 | ⬜ 0 命中 |
 | dshfind 收录 | ⬜ 0 命中 |
 
@@ -65,7 +67,7 @@
 ### 1. 本地自检
 
 ```powershell
-cd D:\Desktop\test\dsh-delete-chat
+cd dsh-chat-prune
 
 npm run build          # 重建 client.js
 npm run check:build    # 产物是否与源码同步
@@ -76,8 +78,8 @@ npm test               # 当前源码的全部逻辑测试
 可选但推荐 —— 用真实桌面 CLI 装一遍（会启一个临时 profile）：
 
 ```powershell
-$env:DSH_ASAR       = 'D:\DSH\DSH NEXT\resources\app.asar'
-$env:DSH_EXECUTABLE = 'D:\DSH\DSH NEXT\DSH NEXT.exe'
+$env:DSH_ASAR       = 'C:\path\to\DSH NEXT\resources\app.asar'
+$env:DSH_EXECUTABLE = 'C:\path\to\DSH NEXT\DSH NEXT.exe'
 npm run test:install   # 期望最后一行 DSH_ADD_INSTALL_PASS
 ```
 
@@ -169,7 +171,7 @@ npm run check:build                        # client.js 与源码同步
 ## 验证收录
 
 ```powershell
-node publish/check-listing.mjs dsh-chat-prune Cans518
+node scripts/check-listing.mjs dsh-chat-prune Cans518
 ```
 
 退出码 0 = 至少一个目录已收录。

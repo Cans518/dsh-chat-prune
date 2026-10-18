@@ -1,7 +1,7 @@
 /**
  * 检查本插件在两个 DSH 商店目录里的收录状态。
  *
- *   node publish/check-listing.mjs dsh-chat-prune
+ *   node scripts/check-listing.mjs dsh-chat-prune
  *
  * 两个目录都是只读公开 API：
  *   - 1024Store  https://deepseek1024.com/api/v2/plugins
