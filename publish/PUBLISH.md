@@ -127,6 +127,43 @@ gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.4.3
 
 ---
 
+## 关于「校验和」的准确说法
+
+**不要**宣称这个包可复现（reproducible build）。实测过，同一份源码在本地和在 GitHub Runner 上 `npm pack` 出来的 tgz **字节不同**：
+
+```
+Runner 上: 8b710ba1f3a1285a23e988654f778a1a6bd5f467cf0844081d5c4279ce3dc7d5
+本地打包:   cadc7e1a0eae2b0cfd969c95944311c1765578b3fbbd0dd30c361e20885e1425
+```
+
+原因是 tar 条目里带着文件 mtime，两个环境的文件时间戳不可能一致。
+
+所以校验和能证明的只有一件事：**你下到的这个文件，就是发布流水线上传的那个文件**。
+
+```powershell
+# 正确用法：拿发布页的 SHA256SUMS.txt 校验下载的文件
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.3/SHA256SUMS.txt -OutFile sums.txt
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.3/dsh-chat-prune-0.4.3.tgz -OutFile p.tgz
+Get-FileHash p.tgz -Algorithm SHA256
+Get-Content sums.txt
+```
+
+```powershell
+# 错误用法：拿自己重新 npm pack 的结果去比 —— 必然不一致，不代表包被篡改
+npm pack --ignore-scripts
+```
+
+真要证明「内容没被改」，看的是**包里的文件清单与内容**，不是整体哈希：
+
+```powershell
+tar -tzf dsh-chat-prune-0.4.3.tgz          # 应恒为 14 个文件
+npm run check:build                        # client.js 与源码同步
+```
+
+`release.yml` 里那步 *Sanity-check tarball contents* 就是干这个的：确认 `package/lib/index.js`、`package/cordis.patch.yml`、`package/client*.js` 都在。
+
+---
+
 ## 验证收录
 
 ```powershell
