@@ -1,6 +1,6 @@
 {
   "name": "dsh-chat-prune",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "DSH conversation management with retention previews, batch archive and pin actions, and guarded deletion.",
   "author": "Cans518",
   "repository": {

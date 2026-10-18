@@ -58,39 +58,71 @@
 
 ---
 
-## 发版步骤
+## 发版步骤（自动化）
 
-前置：`gh` 已认证（`gh auth status` 显示 Logged in）。
+发版由 GitHub Actions 完成，**打 tag 就够了**。
+
+### 1. 本地自检
 
 ```powershell
 cd D:\Desktop\test\dsh-delete-chat
 
-# 1. 构建 + 全量测试
-npm run build
-npm test
+npm run build          # 重建 client.js
+npm run check:build    # 产物是否与源码同步
+node scripts/check-metadata.mjs   # 商店规范自检
+npm test               # 144 项纯逻辑测试
+```
 
-# 2. 真实安装验证（用桌面版 CLI 装进临时 profile 并启动）
+可选但推荐 —— 用真实桌面 CLI 装一遍（会启一个临时 profile）：
+
+```powershell
 $env:DSH_ASAR       = 'D:\DSH\DSH NEXT\resources\app.asar'
 $env:DSH_EXECUTABLE = 'D:\DSH\DSH NEXT\DSH NEXT.exe'
-npm run test:install
-#   期望最后一行：DSH_ADD_INSTALL_PASS
+npm run test:install   # 期望最后一行 DSH_ADD_INSTALL_PASS
+```
 
-# 3. 打包
-npm pack --ignore-scripts
-#   → dsh-chat-prune-0.4.2.tgz
+### 2. 改版本号并推送
 
-# 4. 提交并推送
+```powershell
+# package.json 的 version 改成新版本，README 里的下载链接跟着改
 git add -A
-git commit -m "release: v0.4.2"
+git commit -m "release: v0.4.3"
 git push origin main
+```
 
-# 5. 打 tag + 发 Release（附件就是那个 tgz）
-gh release create v0.4.2 .\dsh-chat-prune-0.4.2.tgz `
-  --title "dsh-chat-prune v0.4.2" `
-  --notes "会话管理：删除、筛选、批量归档/置顶、保留规则修剪，删除前确认且可选备份。"
+推 main 会触发 **CI**：`npm ci → build → 产物漂移检查 → 元数据检查 → test`
+（Node 20 与 24 两个矩阵都跑）。
 
-# 6. 确认 topic 还在（gh release 不会动它，但确认一下）
+### 3. 打 tag —— Release 自动生成
+
+```powershell
+git tag -a v0.4.3 -m "dsh-chat-prune v0.4.3"
+git push origin v0.4.3
+```
+
+`.github/workflows/release.yml` 会依次：
+
+1. 校验 tag 与 `package.json` 版本一致（不一致直接失败）
+2. 构建 + 产物漂移检查 + 元数据检查 + 全量测试
+3. `npm pack --ignore-scripts`
+4. 生成 `SHA256SUMS.txt`
+5. 检查 tar 里确实有 `package/lib/index.js`、`cordis.patch.yml`、`client*.js`
+6. `gh release create` 上传 tgz + 校验和
+
+**tag 复用会失败** —— release 已存在时脚本主动抛错，逼你改版本号而不是覆盖。
+
+### 4. 确认 topic
+
+```powershell
 gh repo edit Cans518/dsh-chat-prune --add-topic dsh-plugin
+```
+
+（已设置过就不必重复。）
+
+### 手动补发（tag 已在，但当时流水线失败）
+
+```powershell
+gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.4.3
 ```
 
 ---
@@ -128,7 +160,7 @@ dshfind 要等 **02:17 UTC**（北京时间 10:17）那次同步。1024Store 的
 - [x] `files` 白名单不含测试与脚本（tarball 14 个文件）
 - [x] `npm pack` 后 `dsh plugin add <tgz>` 能自动启用并启动 Host
 
-`dsh-chat-prune-0.4.2.tgz` 实测结论：
+`dsh-chat-prune-0.4.3.tgz` 实测结论：
 
 ```
 DSH_ADD_INSTALL_PASS: automatic enablement, runtime files, actual Host boot and removal verified
