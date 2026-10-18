@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply, listSessions } from '../lib/index.js'
@@ -35,7 +35,8 @@ test('source verification accepts a host reporting an alias of the same data dir
 })
 
 test('multiple directories merge identical IDs and route mutations to their own host and index', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-sources-'))
+  // Source paths are canonical, even when the Windows temp directory uses an alias.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-sources-')))
   const servers = []
   t.after(async () => {
     await Promise.all(servers.map((server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve) })))
