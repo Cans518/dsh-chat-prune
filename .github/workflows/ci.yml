@@ -1,0 +1,56 @@
+name: CI
+
+# 每次推 main 和每个 PR 都验证：构建可复现、产物不含漂移、纯逻辑测试全绿。
+#
+# 刻意用 windows-latest：本插件面向 DSH NEXT 桌面版（Windows），
+# 而且纯逻辑测试里有路径相关的断言。放 Linux 上跑看着省钱，
+# 但会和真实使用环境脱节。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build + test (node ${{ matrix.node }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 = 声明的最低版本；24 = 开发与桌面版实际使用的版本
+        node: [20, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # 只装运行时依赖：测试全部基于 node 内置模块，不需要 playwright
+      - name: Install
+        run: npm ci --omit=dev
+
+      - name: Build client bundle
+        run: npm run build
+
+      # 产物必须已被提交且与源码一致 —— GitHub 直装拿到的是仓库里那个 client.js，
+      # 一旦漂移，用户装到旧代码且毫无提示。
+      - name: Verify committed bundle is not stale
+        run: git diff --exit-code -- client.js
+
+      - name: Verify package metadata
+        run: node scripts/check-metadata.mjs
+
+      - name: Test
+        run: npm test

@@ -1,0 +1,154 @@
+name: Release
+
+# 打 v* tag 时自动：校验版本 → 构建 → 测试 → 打包 → 生成校验和 → 发 Release。
+#
+# 不走 npm publish：DSH 插件商店按 GitHub 仓库收录，
+# 用户装的是 release 附件或 `github:owner/repo`，npm 不是必需链路。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（必须已存在，例如 v0.4.3）'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq 'workflow_dispatch') { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+') { throw "tag is not vX.Y.Z: $tag" }
+          "value=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "tag = $tag"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.value }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci --omit=dev
+
+      - name: Verify tag matches package.json version
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.tag.outputs.value }}"
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($tag -ne "v$version") { throw "tag $tag does not match package.json $version" }
+          Write-Host "version $version matches"
+
+      - name: Build
+        run: npm run build
+
+      # 仓库里的 client.js 必须就是这次构建的结果：GitHub 直装拿的就是它
+      - name: Verify committed bundle is not stale
+        run: git diff --exit-code -- client.js
+
+      - name: Verify package metadata
+        run: node scripts/check-metadata.mjs
+
+      - name: Test
+        run: npm test
+
+      - name: Pack
+        id: pack
+        shell: pwsh
+        run: |
+          $meta = Get-Content package.json -Raw | ConvertFrom-Json
+          $tgz = "$($meta.name)-$($meta.version).tgz"
+          npm pack --ignore-scripts
+          if (-not (Test-Path $tgz)) { throw "pack failed, $tgz not found" }
+          $hash = (Get-FileHash $tgz -Algorithm SHA256).Hash.ToLower()
+          "$hash  $tgz" | Out-File SHA256SUMS.txt -Encoding ascii
+          "tgz=$tgz" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "name=$($meta.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$($meta.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Get-Content SHA256SUMS.txt
+
+      # 包内必须真的有产物，不能只有源码
+      - name: Sanity-check tarball contents
+        shell: pwsh
+        run: |
+          $tgz = "${{ steps.pack.outputs.tgz }}"
+          $entries = tar -tzf $tgz
+          foreach ($required in @('package/package.json', 'package/lib/index.js', 'package/cordis.patch.yml')) {
+            if ($entries -notcontains $required) { throw "$required missing from tarball" }
+          }
+          if (-not ($entries | Where-Object { $_ -like 'package/client*.js' })) { throw 'no client bundle in tarball' }
+          Write-Host "tarball has $($entries.Count) entries"
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.tag.outputs.value }}"
+          $tgz = "${{ steps.pack.outputs.tgz }}"
+          $version = "${{ steps.pack.outputs.version }}"
+          $name = "${{ steps.pack.outputs.name }}"
+          $repo = $env:GITHUB_REPOSITORY
+
+          gh release view $tag --repo $repo 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "release $tag already exists; bump the version instead of reusing a tag" }
+
+          $fence = [string]::new([char]96, 3)
+          $sums = (Get-Content SHA256SUMS.txt -Raw).Trim()
+          $installUrl = "dsh plugin --profile desktop add https://github.com/$repo/releases/download/$tag/$tgz"
+          $installGit = "dsh plugin --profile desktop add github:$repo"
+
+          $notes = @(
+            '## 安装'
+            ''
+            $fence + 'powershell'
+            $installUrl
+            '# 或直接从仓库装'
+            $installGit
+            $fence
+            ''
+            '## 校验'
+            ''
+            $fence
+            $sums
+            $fence
+            ''
+            ('安装后重新打开 DSH。插件商店按 GitHub topic `dsh-plugin` 收录，通常 24 小时内出现。')
+          )
+          $notes | Out-File -FilePath release-notes.md -Encoding utf8
+
+          gh release create $tag $tgz SHA256SUMS.txt --repo $repo --title "$name v$version" --notes-file release-notes.md --verify-tag
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          $lines = @(
+            '### 发布完成',
+            '',
+            ('- tag: `' + "${{ steps.tag.outputs.value }}" + '`'),
+            ('- 附件: `' + "${{ steps.pack.outputs.tgz }}" + '`'),
+            '- 校验和: `SHA256SUMS.txt`',
+            '',
+            '商店收录（GitHub topic `dsh-plugin` 每日 02:17 UTC 同步）：',
+            ('`node publish/check-listing.mjs ' + "${{ steps.pack.outputs.name }}" + '`')
+          )
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
