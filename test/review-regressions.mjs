@@ -31,16 +31,29 @@ const clientSrc = readFileSync(new URL('../client-core.js', import.meta.url), 'u
 
 console.log('\n== 审核发现的回归钉 ==\n')
 
-// ---------------------------------------------------------------- H1
-check('H1 运行检测通过 ctx.get("sessions") 取服务并声明依赖', () => {
-  // 事故：inject 只有 webServer，ctx.sessions 恒 undefined，
-  // isRunning() 永远 false —— allowRunning:false 等于没写。
+// ---------------------------------------------------------------- H1（已修订）
+check('H1 运行检测按 agents.status 判定，而不是「在内存里」', () => {
+  // 事故链：
+  //   最初 ctx.sessions 恒 undefined → isRunning 永远 false（保护失效）；
+  //   改成读 sessions.get() 之后又走到另一个极端 —— 任何被界面加载过的会话
+  //   都算「正在运行」，于是什么都删不掉。
+  // 正解：agents.get(sessionId).status === 'running'（dsh-agent-loop 的 phase 判定）。
   assert.ok(
-    hostSrc.includes("ctx.get('sessions')") || hostSrc.includes('ctx.get("sessions")'),
-    '没用 ctx.get(\'sessions\') 取服务',
+    hostSrc.includes("ctx.get('agents')") || hostSrc.includes('ctx.get("agents")'),
+    '没有用 ctx.get(\'agents\') 取登记表',
   )
+  assert.ok(hostSrc.includes("status === 'running'"), '没有按 agent.status 判定')
   assert.ok(hostSrc.includes('canDetectRunning'), '缺少 canDetectRunning 可观测性')
-  assert.ok(mod.inject.includes('sessions'))
+})
+
+check('H1 检测不可用时放行，而不是一律拒绝（否则等于删不掉）', () => {
+  assert.equal(
+    hostSrc.includes('无法检测会话是否仍被宿主使用'),
+    false,
+    '又回到「检测不可用就拒绝删除」的硬闸',
+  )
+  assert.ok(hostSrc.includes("persistence.open(sessionId, 'write')") || hostSrc.includes("open(sessionId, 'write')"),
+    '缺少持久化写入所有权兜底')
 })
 
 check('H1 ping 暴露 canDetectRunning（保护失效要可见）', () => {

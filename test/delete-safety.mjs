@@ -223,18 +223,36 @@ test('same id in multiple workspace directories is rejected without removal', as
   assert.equal(await readFile(join(f.dir, 'session.v4.jsonl.zstd'), 'utf8'), 'record')
 })
 
-test('unavailable activity detection refuses destructive deletion', async (t) => {
+test('missing activity detection no longer blocks deletion', async (t) => {
   const f = await fixture(t)
   delete f.ctx.sessions
-  await assert.rejects(() => deleteSession(f.ctx, id, { backup: false }), { status: 503 })
+  // 0.4.3 在这里抛 503 —— 宿主一旦不暴露相关服务就「什么都删不掉」。
+  // 现在放行：真正的排他锁是持久化写入所有权，不是这个软检测。
+  const result = await deleteSession(f.ctx, id, { backup: false })
+  assert.equal(result.ok, true)
+  await assert.rejects(() => readFile(join(f.dir, 'session.v4.jsonl.zstd')), /ENOENT/)
+})
+
+test('a session the host still owns is refused with 409 and left intact', async (t) => {
+  const f = await fixture(t)
+  f.ctx.get = (key) => key === 'sessionPersistence' ? {
+    async open() {
+      const error = new Error('owned')
+      error.name = 'SessionAlreadyOwnedError'
+      throw error
+    },
+  } : undefined
+  await assert.rejects(() => deleteSession(f.ctx, id, { backup: false }), { status: 409 })
   assert.equal(await readFile(join(f.dir, 'session.v4.jsonl.zstd'), 'utf8'), 'record')
 })
 
-test('activity detection errors never masquerade as idle', async (t) => {
+test('activity detection errors are treated as idle instead of wedging deletion', async (t) => {
   const f = await fixture(t)
-  f.ctx.sessions.get = () => { throw new Error('service failed') }
-  await assert.rejects(() => deleteSession(f.ctx, id, { backup: false }), { status: 503 })
-  assert.equal(await readFile(join(f.dir, 'session.v4.jsonl.zstd'), 'utf8'), 'record')
+  f.ctx.get = (key) => key === 'agents' ? {
+    get() { throw new Error('registry half-disposed') },
+  } : undefined
+  const result = await deleteSession(f.ctx, id, { backup: false })
+  assert.equal(result.ok, true)
 })
 
 test('backup failure leaves session and index intact', async (t) => {

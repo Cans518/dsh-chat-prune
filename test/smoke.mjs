@@ -86,18 +86,28 @@ async function fixture() {
   return home
 }
 
-/** 一个最小 ctx 替身：只有 sessions 面，listSessions / isRunning 会用到。 */
+/**
+ * 一个最小 ctx 替身。
+ *
+ * 「是否在跑」现在只看 `agents` 服务里 `agent.status === 'running'`，所以这里提供
+ * agents；同时**故意**让 sessions 对任何会话都返回对象 —— 用来证明
+ * 「仅仅被加载」不再阻止删除（那正是 0.4.3 什么都删不掉的原因）。
+ */
 function fakeCtx(home, { running = [] } = {}) {
   const runningSet = new Set(running)
   return {
     profileContext: { home },
-    sessions: {
-      get: (id) => (runningSet.has(id) ? { header: { cwd: 'D:\\Desktop\\test' } } : undefined),
-      list: {
-        getSnapshot: () => ({
-          byId: Object.fromEntries([...runningSet].map((id) => [id, { id, running: true }])),
-        }),
-      },
+    get(name) {
+      if (name === 'agents') {
+        return { get: (id) => (runningSet.has(id) ? { id, status: 'running' } : undefined) }
+      }
+      if (name === 'sessions') {
+        return {
+          get: () => ({ header: { cwd: 'D:\\Desktop\\test' } }),
+          list: { getSnapshot: () => ({ byId: {} }) },
+        }
+      }
+      return undefined
     },
   }
 }

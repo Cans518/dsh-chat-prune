@@ -24,3 +24,9 @@ Thumbs.db
 .vscode/
 .idea/
 SHA256SUMS.txt
+
+# 本地从 app.asar 抽出的宿主源码快照，绝不入库。
+/_*.js
+/_*.mjs
+/_*.json
+/_*.html

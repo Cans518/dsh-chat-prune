@@ -94,6 +94,14 @@ class El {
     this.children.push(c)
     return c
   }
+  /** 真实 DOM 的 insertBefore(node, ref)；ref 为空等价 appendChild。 */
+  insertBefore(node, ref) {
+    node.parentElement = this
+    const index = ref ? this.children.indexOf(ref) : -1
+    if (index < 0) this.children.push(node)
+    else this.children.splice(index, 0, node)
+    return node
+  }
   contains(node) {
     if (node === this) return true
     return this.children.some((c) => c.contains?.(node))
@@ -713,6 +721,74 @@ await test('名单为空时 hover 不抛错、按钮仍隐藏（重试是异步�
   h.hover(row)
   assert.equal(h.btn.dataset.dshdcVisible, '0')
   h.unmount()
+})
+
+console.log('\n== 提示条：必须能消失 ==\n')
+
+await test('提示条带关闭按钮，点一下立刻消失', () => {
+  const h = mount()
+  win.dshChatPrune.notify('删除失败: 该会话正在运行', { tone: 'error' })
+  const notice = doc.getElementById('dshdc-notice')
+  assert.ok(notice, '提示条没创建')
+  assert.equal(notice.hidden, false)
+
+  const close = notice.querySelector('.dshdc-notice-close')
+  assert.ok(close, '缺少关闭按钮')
+  close.dispatch('click', { preventDefault() {}, stopPropagation() {} })
+  assert.equal(notice.hidden, true, '点关闭后应当消失')
+  h.unmount()
+})
+
+await test('失败提示会自动消失（不再永久钉住）', () => {
+  const h = mount()
+  // 用一个很短的超时验证定时器真的挂了
+  win.dshChatPrune.notify('删除失败: 该会话正在运行', { tone: 'error', timeout: 15 })
+  const notice = doc.getElementById('dshdc-notice')
+  assert.equal(notice.hidden, false)
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      try {
+        assert.equal(notice.hidden, true, '超时后提示条应自动消失')
+        h.unmount()
+        resolve()
+      } catch (e) {
+        reject(e)
+      }
+    }, 60)
+  })
+})
+
+await test('新提示会顶掉旧提示，不会堆叠或残留', () => {
+  const h = mount()
+  win.dshChatPrune.notify('删除中…', { tone: 'busy' })
+  win.dshChatPrune.notify('已删除', { tone: 'done' })
+  // 桩不支持 #id 选择器，手动数一遍
+  const count = (node) => {
+    let n = node.getAttribute?.('id') === 'dshdc-notice' ? 1 : 0
+    for (const child of node.children || []) n += count(child)
+    return n
+  }
+  const total = count(doc.body)
+  assert.equal(total, 1, `提示条不应堆叠，实际 ${total} 个`)
+  assert.match(doc.getElementById('dshdc-notice').textContent, /已删除/)
+  h.unmount()
+})
+
+await test('忙碌状态的提示在结果到来前不会自己消失', () => {
+  const h = mount()
+  win.dshChatPrune.notify('删除中…', { tone: 'busy' })
+  const notice = doc.getElementById('dshdc-notice')
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      try {
+        assert.equal(notice.hidden, false, 'busy 提示不该被定时清掉')
+        h.unmount()
+        resolve()
+      } catch (e) {
+        reject(e)
+      }
+    }, 60)
+  })
 })
 
 console.log(`\n== 结果: ${pass} 通过 / ${fail} 失败 ==\n`)

@@ -18,7 +18,7 @@
   if (typeof document === "undefined") return;
   // 防重复注入（HMR / 路由重渲染可能多次插入同一 script）
   if (window.__dshChatPruneInstalled__) return;
-  window.__dshChatPruneBuildVersion__ = "0.4.3";
+  window.__dshChatPruneBuildVersion__ = "0.4.4";
 
 // ---------- begin client-core.js ----------
 const DAY_MS = 86400000
@@ -492,6 +492,7 @@ const zh = {
   'state.running': '正在运行中，已拒绝删除',
   'state.hostOutdated': '宿主仍在运行旧版删除插件。请正常退出 DSH 后重新打开，再尝试删除。',
   'state.timeout': '请求超时，结果尚未确认。请刷新列表检查后再重试。',
+  'notice.dismiss': '关闭提示',
   'state.unknown': '未收到有效响应，结果尚未确认。请刷新列表检查后再重试。',
   'state.refreshFailed': '删除已完成，但列表刷新失败。请点击刷新列表。',
   'state.partial': '删除可能已部分完成。请修复上述错误后重试以清理残留索引。',
@@ -525,6 +526,7 @@ const en = {
   'state.running': 'Session is running; deletion refused',
   'state.hostOutdated': 'The host still runs the old deletion plugin. Quit DSH normally and reopen it before deleting.',
   'state.timeout': 'Request timed out; the result is unknown. Refresh the list before retrying.',
+  'notice.dismiss': 'Dismiss notice',
   'state.unknown': 'No valid response was received; the result is unknown. Refresh before retrying.',
   'state.refreshFailed': 'Deletion completed, but refreshing failed. Refresh the list to check.',
   'state.partial': 'Deletion may have partly completed. Fix the error and retry to clean up remaining entries.',
@@ -888,9 +890,19 @@ function ensureLayer() {
   #dshdc-manager > .dshdc-actions { top:-16px; }
 }
 #dshdc-notice { position:fixed; right:16px; bottom:72px; max-width:min(480px, calc(100vw - 32px));
-  padding:12px 16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px);
+  padding:12px 40px 12px 16px; border:1px solid var(--dshdc-border); border-radius:var(--dsw-radius-md, 8px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
   font:inherit; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; pointer-events:auto; }
+#dshdc-notice[hidden] { display:none; }
+#dshdc-notice[data-tone="error"] { border-color:var(--dshdc-danger, #ff6b6b); }
+#dshdc-notice[data-tone="done"] { border-color:var(--dshdc-ok, #4ec97a); }
+#dshdc-notice > .dshdc-notice-close {
+  all:unset; position:absolute; top:6px; right:6px; width:22px; height:22px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border-radius:5px; cursor:pointer; color:inherit; opacity:.7; font-size:16px; line-height:1;
+}
+#dshdc-notice > .dshdc-notice-close:hover { opacity:1; background:var(--dshdc-hover, rgba(255,255,255,.1)); }
+#dshdc-notice > .dshdc-notice-close:focus-visible { opacity:1; outline:2px solid var(--dshdc-accent, #4d9fff); }
 @media (prefers-reduced-motion:reduce) { .${BTN_CLASS} { transition:none; } }
 @media (pointer:coarse) { .${BTN_CLASS} { width:44px; height:44px; transform:translate(-22px,-11px); } }
 `
@@ -924,8 +936,31 @@ function ensureButton(layer, onClick) {
 
 // ---------------------------------------------------------------- 删除
 
-function notify(message) {
-  let notice = document.getElementById('dshdc-manager-notice') || document.getElementById('dshdc-notice')
+/**
+ * 顶部/底部提示条。
+ *
+ * 历史 bug：只 set textContent，既没有超时也没有关闭按钮 —— 一旦出现
+ * 「删除失败: …」，它就**永久钉在屏幕上**，连后续成功也不会让它消失。
+ *
+ * 现在：
+ *   - 忙时（deleting）用 sticky，等结果来替换；
+ *   - 成功 6 秒自动消失；
+ *   - 失败 12 秒自动消失，并且始终带一个 × 可以立刻关掉。
+ */
+let noticeTimer = 0
+
+function dismissNotice() {
+  clearTimeout(noticeTimer)
+  noticeTimer = 0
+  const el = document.getElementById('dshdc-notice') || document.getElementById('dshdc-manager-notice')
+  if (el) {
+    el.textContent = ''
+    el.hidden = true
+  }
+}
+
+function notify(message, { tone = 'info', timeout } = {}) {
+  let notice = document.getElementById('dshdc-notice')
   if (!notice) {
     notice = document.createElement('div')
     notice.id = 'dshdc-notice'
@@ -933,7 +968,38 @@ function notify(message) {
     notice.setAttribute('aria-live', 'polite')
     document.getElementById(LAYER_ID)?.appendChild(notice)
   }
-  notice.textContent = message
+  notice.hidden = false
+  notice.dataset.tone = tone
+
+  // 关闭按钮：提示条唯一的确定性消失方式
+  let close = notice.querySelector('.dshdc-notice-close')
+  if (!close) {
+    close = document.createElement('button')
+    close.type = 'button'
+    close.className = 'dshdc-notice-close'
+    close.setAttribute('aria-label', currentT('notice.dismiss'))
+    close.title = currentT('notice.dismiss')
+    close.textContent = '×'
+    close.addEventListener('click', (ev) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+      dismissNotice()
+    })
+    notice.appendChild(close)
+  }
+
+  let body = notice.querySelector('.dshdc-notice-body')
+  if (!body) {
+    body = document.createElement('span')
+    body.className = 'dshdc-notice-body'
+    notice.insertBefore(body, close)
+  }
+  body.textContent = message
+
+  clearTimeout(noticeTimer)
+  noticeTimer = 0
+  const ms = timeout ?? (tone === 'busy' ? 0 : tone === 'error' ? 12000 : 6000)
+  if (ms > 0) noticeTimer = setTimeout(dismissNotice, ms)
 }
 
 function createDialog(title) {
@@ -1010,13 +1076,13 @@ async function askThenDelete(sessionId, btn) {
     // Revalidate the target and effective backup setting before confirmation.
     const map = await refreshTitleMap(true)
     const row = map.sessions?.find((item) => item.id === sessionId)
-    if (map.canDetectRunning === false && !row?.missing && map.config?.allowRunning !== true) {
-      throw new Error(t('manage.unknown'))
-    }
+    // 注意：这里**不再**因为 canDetectRunning=false 就拒绝。
+    // 0.4.3 会因此直接抛错，导致宿主没暴露 agents 服务时「什么都删不掉」。
+    // 真正能不能删，交给 host 的写入所有权判定（409 会带回明确原因）。
     if (!await confirmDeletion(sessionId, row)) return false
     btn.dataset.dshdcState = 'deleting'
     btn.title = t('state.deleting')
-    notify(t('state.deleting'))
+    notify(t('state.deleting'), { tone: 'busy' })
     const data = await requestJson(`${API_BASE}/sessions`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
@@ -1024,11 +1090,11 @@ async function askThenDelete(sessionId, btn) {
     })
     btn.dataset.dshdcState = 'done'
     btn.title = data && data.alreadyGone ? t('state.gone') : t('state.done')
-    notify(`${btn.title}${data.backupDir ? `\n${t('manage.backup')}${data.backupDir}` : ''}`)
+    notify(`${btn.title}${data.backupDir ? `\n${t('manage.backup')}${data.backupDir}` : ''}`, { tone: 'done' })
     try {
       await refreshSessionLists(sessionId)
     } catch {
-      notify(t('state.refreshFailed'))
+      notify(t('state.refreshFailed'), { tone: 'error' })
     }
     btn.dataset.dshdcVisible = '0'
     return true
@@ -1036,7 +1102,7 @@ async function askThenDelete(sessionId, btn) {
     const msg = String((error && error.message) || error)
     btn.dataset.dshdcState = 'failed'
     btn.title = error.name === 'AbortError' ? t('state.timeout') : error.outcomeUnknown ? t('state.unknown') : `${t('state.failed')}: ${msg}`
-    notify(`${btn.title}${error.partial ? `\n${t('state.partial')}` : ''}${error.backupDir ? `\n${t('manage.backup')}${error.backupDir}` : ''}`)
+    notify(`${btn.title}${error.partial ? `\n${t('state.partial')}` : ''}${error.backupDir ? `\n${t('manage.backup')}${error.backupDir}` : ''}`, { tone: 'error' })
     return false
   } finally {
     pendingDeletes.delete(sessionId)
@@ -1276,6 +1342,13 @@ function apply(ctx) {
       probe: (el) => ({ isRow: Boolean(resolveRow(el)), id: el ? resolveRow(el)?.id || null : null }),
       openManager,
       requestDelete: (id, button) => askThenDelete(id, button || btn),
+      /** 提示条自检/手动清除（排查「提示不消失」时用）。 */
+      notice: () => {
+        const el = document.getElementById('dshdc-notice')
+        return el ? { text: el.textContent || '', tone: el.dataset.tone || null, hidden: el.hidden === true } : null
+      },
+      dismissNotice,
+      notify: (message, options) => notify(message, options),
       reportNativeReady: () => report('nativeRowActionReady', { version: window.__dshChatPruneBuildVersion__ || 'source' }),
       setRowSelectors: (list) => {
         if (list === null) localStorage.removeItem(OVERRIDE_KEY)

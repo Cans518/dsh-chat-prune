@@ -86,7 +86,7 @@ npm run test:install   # 期望最后一行 DSH_ADD_INSTALL_PASS
 ```powershell
 # package.json 的 version 改成新版本，README 里的下载链接跟着改
 git add -A
-git commit -m "release: v0.4.3"
+git commit -m "release: v0.4.4"
 git push origin main
 ```
 
@@ -96,8 +96,8 @@ git push origin main
 ### 3. 打 tag —— Release 自动生成
 
 ```powershell
-git tag -a v0.4.3 -m "dsh-chat-prune v0.4.3"
-git push origin v0.4.3
+git tag -a v0.4.4 -m "dsh-chat-prune v0.4.4"
+git push origin v0.4.4
 ```
 
 `.github/workflows/release.yml` 会依次：
@@ -122,7 +122,7 @@ gh repo edit Cans518/dsh-chat-prune --add-topic dsh-plugin
 ### 手动补发（tag 已在，但当时流水线失败）
 
 ```powershell
-gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.4.3
+gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.4.4
 ```
 
 ---
@@ -142,8 +142,8 @@ Runner 上: 8b710ba1f3a1285a23e988654f778a1a6bd5f467cf0844081d5c4279ce3dc7d5
 
 ```powershell
 # 正确用法：拿发布页的 SHA256SUMS.txt 校验下载的文件
-Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.3/SHA256SUMS.txt -OutFile sums.txt
-Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.3/dsh-chat-prune-0.4.3.tgz -OutFile p.tgz
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.4/SHA256SUMS.txt -OutFile sums.txt
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.4/dsh-chat-prune-0.4.4.tgz -OutFile p.tgz
 Get-FileHash p.tgz -Algorithm SHA256
 Get-Content sums.txt
 ```
@@ -156,7 +156,7 @@ npm pack --ignore-scripts
 真要证明「内容没被改」，看的是**包里的文件清单与内容**，不是整体哈希：
 
 ```powershell
-tar -tzf dsh-chat-prune-0.4.3.tgz          # 应恒为 14 个文件
+tar -tzf dsh-chat-prune-0.4.4.tgz          # 应恒为 14 个文件
 npm run check:build                        # client.js 与源码同步
 ```
 
@@ -197,7 +197,7 @@ dshfind 要等 **02:17 UTC**（北京时间 10:17）那次同步。1024Store 的
 - [x] `files` 白名单不含测试与脚本（tarball 14 个文件）
 - [x] `npm pack` 后 `dsh plugin add <tgz>` 能自动启用并启动 Host
 
-`dsh-chat-prune-0.4.3.tgz` 实测结论：
+`dsh-chat-prune-0.4.4.tgz` 实测结论：
 
 ```
 DSH_ADD_INSTALL_PASS: automatic enablement, runtime files, actual Host boot and removal verified

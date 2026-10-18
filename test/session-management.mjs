@@ -14,7 +14,14 @@ async function fixture(t) {
   await writeFile(join(dir, 'attachments', 'image'), 'picture')
   const registry = {
     pinnedSessionIds: ['session-one'], archivedSessionIds: [],
-    list: () => [{ id: 'workspace-one', title: 'Project One', record: { sessionIds: ['session-one', 'session-missing'] } }],
+    list: () => [{
+      id: 'workspace-one', title: 'Project One',
+      record: { sessionIds: ['session-one', 'session-missing'] },
+      // 真实宿主的工作区实体带 detachSession；缺了它 host 会按「服务不兼容」拒绝删除
+      async detachSession(value) {
+        this.record.sessionIds = this.record.sessionIds.filter((entry) => entry !== value)
+      },
+    }],
     async archiveSession(id) { this.archivedSessionIds.push(id); this.pinnedSessionIds = this.pinnedSessionIds.filter((value) => value !== id) },
     async unarchiveSession(id) { this.archivedSessionIds = this.archivedSessionIds.filter((value) => value !== id) },
     async pinSession(id) { this.pinnedSessionIds.push(id) },
@@ -115,7 +122,8 @@ test('HTTP exposes capability gating, validates preview timestamp and cannot dis
   assert.equal((await request('POST', 'sessions/action', { sessionId: 'session-one', action: 'archive' })).status, 200)
   assert.equal((await request('DELETE', 'sessions', { sessionId: 'session-one', expectedMtime: -1 })).status, 400)
   assert.equal((await request('DELETE', 'sessions', { sessionId: 'session-one', expectedRevision: 'invalid' })).status, 400)
-  f.ctx.sessions.get = () => ({ id: 'session-one' })
+  // 上一行 archive 会顺带取消置顶，这里显式恢复，才真的测到「置顶保护」
+  f.registry.pinnedSessionIds = ['session-one']
   assert.equal((await request('DELETE', 'sessions', { sessionId: 'session-one', protectPinned: true })).status, 409)
   assert.equal(await readFile(join(f.dir, 'record'), 'utf8'), 'hello')
   assert.equal((await request('GET', 'sessions')).body.config.backup, true)
