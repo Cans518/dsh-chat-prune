@@ -21,7 +21,7 @@ npm test
 | 命令 | 验证范围 |
 |---|---|
 | `npm test` | 当前源码的逻辑、客户端状态、导出、删除安全和日志解析；不读取真实用户 home |
-| `npm run test:browser` | Chromium 单条及批量交互、真实 HTTP、保留规则、停止任务、临时会话目录 |
+| `npm run test:browser` | Chromium 单条及批量交互、真实 HTTP、保留规则、停止任务、临时会话目录，以及布局、键盘和对比度 |
 | `npm run test:installed` | 本机已安装插件的配置、代码一致性及宿主集成；需要本地 DSH 环境 |
 | `npm run test:host` | 实际 DSH Host 与官方前端，使用独立临时 home/profile；需要 Windows 和本地 DSH |
 | `npm run test:install` | 打包后调用真实 DSH CLI，验证安装、自动启用、Host 启动与卸载；需要 Windows 和桌面版运行时 |
@@ -45,6 +45,8 @@ npm run test:host
 浏览器测试覆盖已打开窗口随浅色、深色及自定义主题变量即时变化，以及页面卸载恢复时的名单请求和批量操作隔离。真实 Host 测试通过 DSH 设置页切换浅色和深色，核对实际弹窗配色；兼容旧版 API Key 向导和 2.0.19-next 的“开始使用”向导、账号菜单设置入口，均通过正常按钮进入。隔离 Host 缺少可选 Explorer 图标时，测试仅为该图标提供夹具，不替换主题、会话或删除接口。
 
 多来源浏览器测试覆盖新增和持久化路径、两个目录下相同 ID 的独立选择、合并预览、只删除指定来源、未连接来源的只读状态与移除来源保留数据。生命周期逻辑测试覆盖 caller proxy 身份、原始所有权、预览后开始运行的拒绝及先释放再持锁；真实 Host 测试先打开记录并切换到另一会话，再从侧栏删除已打开的历史记录。
+
+`test/manager-layout.mjs` 使用虚构记录检查浅深主题文字对比度、320px/375px 和横屏布局、预览焦点、规则编辑、加载恢复和减少动态效果。运行时在 `.diagnostics/manager-ui/` 生成预览截图；这些截图是测试夹具，不是真实用户记录。
 
 安装测试复用 `DSH_ASAR` / `DSH_EXECUTABLE`，默认从该安装的 `resources/runtime/<arch>/primary-runtime/dependencies/` 查找 Node 和 pnpm；布局不同时可设置 `DSH_NODE_EXECUTABLE`、`DSH_PNPM`。`DSH_INSTALL_SPEC` 可指定待验证的远程安装源，未指定时使用本项目打包的 `.tgz`。测试使用独立的 `.diagnostics/cli-install-*`，不修改现有用户 profile。
 

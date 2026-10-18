@@ -6,6 +6,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { measureManagerContrast } from './helpers/manager-contrast.mjs'
 
 const archive = process.env.DSH_ASAR
 assert.ok(archive, 'Set DSH_ASAR to your DSH installation resources/app.asar before running test:host')
@@ -190,6 +191,12 @@ async function parentMain() {
       })
       assert.deepEqual(actual, { surface: theme.surface, text: theme.text, scheme: theme.scheme })
       await themeManager.locator('.dshdc-record').first().waitFor()
+      await themeManager.locator('.dshdc-record input').first().check()
+      assert.equal(await themeManager.getByRole('button', { name: '预览所选操作', exact: true }).isEnabled(), true)
+      const contrast = await themeManager.evaluate(measureManagerContrast)
+      for (const [role, ratio] of Object.entries(contrast)) {
+        assert.ok(ratio >= 4.5, `Actual host ${theme.scheme} ${role} contrast is ${ratio}`)
+      }
       await page.screenshot({ path: join(home, `theme-${theme.scheme}.png`) })
       await themeManager.getByRole('button', { name: '关闭', exact: true }).click()
       await themeManager.waitFor({ state: 'detached' })

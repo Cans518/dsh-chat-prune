@@ -47,7 +47,7 @@ DSH Chat Prune 是一个社区维护的对话管理插件。它在 DSH NEXT 侧�
 先启动一次 DSH NEXT 完成 profile 初始化，再从系统托盘正常退出。使用桌面版提供的命令安装：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.5/dsh-chat-prune-0.4.5.tgz
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.5.0/dsh-chat-prune-0.5.0.tgz
 ```
 
 重新打开 DSH 即可使用。安装包已包含构建产物，安装时会自动启用插件，无需克隆仓库、编译或手动添加 YAML 挂载条目。
@@ -55,7 +55,7 @@ dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/relea
 也可以在 [Releases](https://github.com/Cans518/dsh-chat-prune/releases/latest) 下载 `.tgz` 和 `SHA256SUMS.txt`，校验后从本地安装：
 
 ```powershell
-dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.4.5.tgz"
+dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.5.0.tgz"
 ```
 
 终端找不到 `dsh` 时，请先启用 DSH NEXT 桌面版的命令行入口，再重新打开终端。使用 Web profile 时将 `desktop` 换成 `web`；请安装到实际使用的 profile。
@@ -75,7 +75,7 @@ dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.4.5.tgz"
 
 ### 按规则修剪
 
-在管理窗口打开“按保留规则修剪”，例如设置“每个工作区保留最近 10 条，只修剪早于 30 天的记录”，生成候选后预览并确认。
+在管理窗口点击“保留规则”，例如设置“每个工作区保留最近 10 条，只修剪早于 30 天的记录”，生成候选后预览并确认。
 
 “最近 N 条”按每个来源中的整个工作区计算。置顶、运行中、无法安全释放、记录缺失或时间未知的对话受保护。
 
