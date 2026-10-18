@@ -14,7 +14,8 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # main 上的发布必须完成；PR 的旧检查仍可取消。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -54,3 +55,11 @@ jobs:
 
       - name: Test
         run: npm test
+
+  release:
+    name: release new version
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml

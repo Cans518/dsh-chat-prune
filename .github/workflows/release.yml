@@ -1,6 +1,6 @@
 name: Release
 
-# 打 v* tag 时自动：校验版本 → 构建 → 测试 → 打包 → 生成校验和 → 发 Release。
+# main 的 CI 通过后自动发布新版本，也支持 v* tag 和手动补发。
 #
 # 不走 npm publish：DSH 插件商店按 GitHub 仓库收录，
 # 用户装的是 release 附件或 `github:owner/repo`，npm 不是必需链路。
@@ -8,38 +8,90 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_call:
+    inputs:
+      tag:
+        description: '可选的已有 tag；留空时按调用方提交的 package.json 发布'
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（必须已存在，例如 v0.4.3）'
-        required: true
+        description: '可选的已有 tag，例如 v0.4.5；留空时发布所选分支的版本'
+        required: false
         type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.repository }}
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: publish release
+  prepare:
+    name: check release version
     runs-on: windows-latest
-
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
-      - name: Resolve tag
-        id: tag
-        shell: pwsh
-        run: |
-          $tag = if ("${{ github.event_name }}" -eq 'workflow_dispatch') { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
-          if ($tag -notmatch '^v\d+\.\d+\.\d+') { throw "tag is not vX.Y.Z: $tag" }
-          "value=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "tag = $tag"
-
       - uses: actions/checkout@v7
         with:
-          ref: ${{ steps.tag.outputs.value }}
+          ref: ${{ inputs.tag || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve version and check existing releases
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "unsupported release version: $version" }
+          $tag = "v$version"
+          $requestedTag = if ($env:REQUESTED_TAG) { $env:REQUESTED_TAG } elseif ($env:REF_TYPE -eq 'tag') { $env:REF_NAME } else { '' }
+          if ($requestedTag -and $requestedTag -ne $tag) { throw "tag $requestedTag does not match package.json $version" }
+          $sha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'cannot resolve release commit' }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          $releaseStates = @(gh api --paginate "repos/$env:GITHUB_REPOSITORY/releases" --jq '.[] | [.tag_name, .draft] | @tsv')
+          if ($LASTEXITCODE -ne 0) { throw 'cannot check existing GitHub releases' }
+          if ("$tag`ttrue" -in $releaseStates) { throw "release $tag is still a draft; finish or remove the draft before retrying" }
+          if ("$tag`tfalse" -in $releaseStates) {
+            "publish=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "### $tag 已发布，跳过重复发布。更新 package.json 版本号即可自动发布下一版。" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            exit 0
+          }
+
+          $existingTag = git tag --list $tag
+          if ($LASTEXITCODE -ne 0) { throw 'cannot check existing tag' }
+          if ($existingTag) {
+            $tagSha = git rev-parse "$tag^{commit}"
+            if ($LASTEXITCODE -ne 0 -or $tagSha -ne $sha) { throw "tag $tag points to another commit; use a new version" }
+          }
+          "publish=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "publish $tag from $sha"
+
+  release:
+    name: publish release
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v7
@@ -53,7 +105,7 @@ jobs:
       - name: Verify tag matches package.json version
         shell: pwsh
         run: |
-          $tag = "${{ steps.tag.outputs.value }}"
+          $tag = $env:RELEASE_TAG
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           if ($tag -ne "v$version") { throw "tag $tag does not match package.json $version" }
           Write-Host "version $version matches"
@@ -78,6 +130,7 @@ jobs:
           $meta = Get-Content package.json -Raw | ConvertFrom-Json
           $tgz = "$($meta.name)-$($meta.version).tgz"
           npm pack --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'npm pack failed' }
           if (-not (Test-Path $tgz)) { throw "pack failed, $tgz not found" }
           $hash = (Get-FileHash $tgz -Algorithm SHA256).Hash.ToLower()
           "$hash  $tgz" | Out-File SHA256SUMS.txt -Encoding ascii
@@ -92,10 +145,10 @@ jobs:
         run: |
           $tgz = "${{ steps.pack.outputs.tgz }}"
           $entries = tar -tzf $tgz
-          foreach ($required in @('package/package.json', 'package/lib/index.js', 'package/cordis.patch.yml')) {
+          if ($LASTEXITCODE -ne 0) { throw 'cannot read package tarball' }
+          foreach ($required in @('package/package.json', 'package/lib/index.js', 'package/lib/session-sources.js', 'package/cordis.patch.yml', 'package/client.js', 'package/client-slot.js')) {
             if ($entries -notcontains $required) { throw "$required missing from tarball" }
           }
-          if (-not ($entries | Where-Object { $_ -like 'package/client*.js' })) { throw 'no client bundle in tarball' }
           Write-Host "tarball has $($entries.Count) entries"
 
       - name: Create GitHub release
@@ -103,14 +156,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ steps.tag.outputs.value }}"
+          $tag = $env:RELEASE_TAG
           $tgz = "${{ steps.pack.outputs.tgz }}"
           $version = "${{ steps.pack.outputs.version }}"
           $name = "${{ steps.pack.outputs.name }}"
           $repo = $env:GITHUB_REPOSITORY
-
-          gh release view $tag --repo $repo 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) { throw "release $tag already exists; bump the version instead of reusing a tag" }
 
           $fence = [string]::new([char]96, 3)
           $sums = (Get-Content SHA256SUMS.txt -Raw).Trim()
@@ -136,7 +186,20 @@ jobs:
           )
           $notes | Out-File -FilePath release-notes.md -Encoding utf8
 
-          gh release create $tag $tgz SHA256SUMS.txt --repo $repo --title "$name v$version" --notes-file release-notes.md --verify-tag
+          # 再次核对标签，并用普通 push 拒绝构建期间出现的冲突标签。
+          $existingTag = git tag --list $tag
+          if ($LASTEXITCODE -ne 0) { throw 'cannot check release tag' }
+          if (-not $existingTag) {
+            git tag $tag $env:RELEASE_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'cannot create release tag' }
+          }
+          $tagSha = git rev-parse "$tag^{commit}"
+          if ($LASTEXITCODE -ne 0 -or $tagSha -ne $env:RELEASE_SHA) { throw "tag $tag points to another commit" }
+          git push origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw 'cannot push release tag; check for a conflicting remote tag' }
+
+          gh release create $tag $tgz SHA256SUMS.txt --repo $repo --target $env:RELEASE_SHA --verify-tag --title "$name v$version" --notes-file release-notes.md --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed' }
 
       - name: Summary
         shell: pwsh
@@ -144,7 +207,7 @@ jobs:
           $lines = @(
             '### 发布完成',
             '',
-            ('- tag: `' + "${{ steps.tag.outputs.value }}" + '`'),
+            ('- tag: `' + $env:RELEASE_TAG + '`'),
             ('- 附件: `' + "${{ steps.pack.outputs.tgz }}" + '`'),
             '- 校验和: `SHA256SUMS.txt`',
             '',

@@ -60,7 +60,7 @@
 
 ## 发版步骤（自动化）
 
-发版由 GitHub Actions 完成，**打 tag 就够了**。
+发版由 GitHub Actions 完成：**更新版本号并推送 main，CI 通过后自动创建 tag 和 Release**。无需再手动打 tag。
 
 ### 1. 本地自检
 
@@ -70,7 +70,7 @@ cd D:\Desktop\test\dsh-delete-chat
 npm run build          # 重建 client.js
 npm run check:build    # 产物是否与源码同步
 node scripts/check-metadata.mjs   # 商店规范自检
-npm test               # 144 项纯逻辑测试
+npm test               # 当前源码的全部逻辑测试
 ```
 
 可选但推荐 —— 用真实桌面 CLI 装一遍（会启一个临时 profile）：
@@ -84,32 +84,30 @@ npm run test:install   # 期望最后一行 DSH_ADD_INSTALL_PASS
 ### 2. 改版本号并推送
 
 ```powershell
-# package.json 的 version 改成新版本，README 里的下载链接跟着改
+# 同步 package.json、package-lock.json 的版本和 README 下载链接，再重建 client.js
+npm run build
 git add -A
-git commit -m "release: v0.4.4"
+git commit -m "release: v0.4.5"
 git push origin main
 ```
 
-推 main 会触发 **CI**：`npm ci → build → 产物漂移检查 → 元数据检查 → test`
-（Node 20 与 24 两个矩阵都跑）。
+推 main 会触发 **CI**：`npm ci → build → 产物漂移检查 → 元数据检查 → test`，
+Node 20 与 24 两个矩阵都通过后，调用 `.github/workflows/release.yml`。
+PR 只做验证，不发布。main 的在途运行不会被后续推送取消，以免中断发布。
 
-### 3. 打 tag —— Release 自动生成
+### 3. 等待 Release 自动生成
 
-```powershell
-git tag -a v0.4.4 -m "dsh-chat-prune v0.4.4"
-git push origin v0.4.4
-```
+可复用的 `.github/workflows/release.yml` 会依次：
 
-`.github/workflows/release.yml` 会依次：
-
-1. 校验 tag 与 `package.json` 版本一致（不一致直接失败）
+1. 从本次 CI 验证的提交读取 `package.json` 版本，生成 `v<version>`；已发布版本直接跳过
 2. 构建 + 产物漂移检查 + 元数据检查 + 全量测试
 3. `npm pack --ignore-scripts`
 4. 生成 `SHA256SUMS.txt`
-5. 检查 tar 里确实有 `package/lib/index.js`、`cordis.patch.yml`、`client*.js`
-6. `gh release create` 上传 tgz + 校验和
+5. 检查 tar 里的宿主入口、多来源模块、配置、客户端构建产物和槽入口
+6. 再次核对并推送指向本次提交的标签，`gh release create --verify-tag` 上传 tgz + 校验和，并附上变更记录
 
-**tag 复用会失败** —— release 已存在时脚本主动抛错，逼你改版本号而不是覆盖。
+同一版本重复推送或重跑会跳过发布，发布新内容须更新版本号。已有 tag 指向其他提交时会失败，不覆盖旧 tag 或 Release。
+已有草稿不会被当作发布成功；需先完成或删除草稿，再重跑。所有发布入口串行执行。保留 `v*` tag 推送入口，tag 必须与其提交中的 `package.json` 版本一致。
 
 ### 4. 确认 topic
 
@@ -119,10 +117,14 @@ gh repo edit Cans518/dsh-chat-prune --add-topic dsh-plugin
 
 （已设置过就不必重复。）
 
-### 手动补发（tag 已在，但当时流水线失败）
+### 手动补发
 
 ```powershell
-gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.4.4
+# 发布 main 当前版本（自动创建缺失的 tag）
+gh workflow run release.yml --repo Cans518/dsh-chat-prune --ref main
+
+# 发布已有 tag（用于标签已推送、但此前发布失败的情况）
+gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.4.5
 ```
 
 ---
@@ -142,8 +144,8 @@ Runner 上: 8b710ba1f3a1285a23e988654f778a1a6bd5f467cf0844081d5c4279ce3dc7d5
 
 ```powershell
 # 正确用法：拿发布页的 SHA256SUMS.txt 校验下载的文件
-Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.4/SHA256SUMS.txt -OutFile sums.txt
-Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.4/dsh-chat-prune-0.4.4.tgz -OutFile p.tgz
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.5/SHA256SUMS.txt -OutFile sums.txt
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.5/dsh-chat-prune-0.4.5.tgz -OutFile p.tgz
 Get-FileHash p.tgz -Algorithm SHA256
 Get-Content sums.txt
 ```
@@ -156,11 +158,11 @@ npm pack --ignore-scripts
 真要证明「内容没被改」，看的是**包里的文件清单与内容**，不是整体哈希：
 
 ```powershell
-tar -tzf dsh-chat-prune-0.4.4.tgz          # 应恒为 14 个文件
+tar -tzf dsh-chat-prune-0.4.5.tgz          # 核对实际运行文件清单
 npm run check:build                        # client.js 与源码同步
 ```
 
-`release.yml` 里那步 *Sanity-check tarball contents* 就是干这个的：确认 `package/lib/index.js`、`package/cordis.patch.yml`、`package/client*.js` 都在。
+`release.yml` 里的 *Sanity-check tarball contents* 会确认宿主入口、多来源模块、配置、`client.js` 和 `client-slot.js` 都在。
 
 ---
 
@@ -193,8 +195,8 @@ dshfind 要等 **02:17 UTC**（北京时间 10:17）那次同步。1024Store 的
 - [x] `icon` 指向存在的 svg
 - [x] `main` 与 `exports["."]` 指向存在的 `lib/index.js`
 - [x] **构建产物已提交**（`client.js`），GitHub 直装不跑 `prepack`
-- [x] `prepare` 会在 git 安装时重建，避免产物过期
-- [x] `files` 白名单不含测试与脚本（tarball 14 个文件）
+- [x] 不声明 `prepare`；构建产物已提交，CI 检查其与源码一致
+- [x] `files` 白名单不含测试与脚本
 - [x] `npm pack` 后 `dsh plugin add <tgz>` 能自动启用并启动 Host
 
 `dsh-chat-prune-0.4.4.tgz` 实测结论：
@@ -212,5 +214,5 @@ DSH_ADD_INSTALL_PASS: automatic enablement, runtime files, actual Host boot and 
 | 两个目录都不收录 | 仓库没打 `dsh-plugin` topic，或仓库是 private / archived |
 | 打了 topic 仍不收 | 还没到同步点（02:17 UTC）；或连续两次仍无 → 去 `hikariming/dshfind` 开 issue |
 | 装了但没反应 | 装了包但 bundle 没进 `dsh.profile.bundles`；用 `dsh plugin add` 会自动加，手抄目录不会 |
-| 用户装了旧版 | 仓库里的 `client.js` 没重新提交，GitHub 直装拿到旧产物（已用 `prepare` 兜住） |
+| 用户装了旧版 | 检查是否安装了新 Release；GitHub 直装使用已提交的 `client.js`，由 CI 检查产物漂移 |
 | 商店显示不兼容 | `engines.dsh` 范围与用户宿主版本不匹配 |

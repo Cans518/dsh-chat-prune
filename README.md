@@ -56,7 +56,7 @@ macOS / Linux 的在线删除目前未开放。Node.js 缺少 zstd 支持时，�
 在终端执行：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.4/dsh-chat-prune-0.4.4.tgz
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.5/dsh-chat-prune-0.4.5.tgz
 ```
 
 安装完成后重新打开 DSH。该命令会安装依赖并自动启用插件，**不需要手动编辑 `package.json` 或添加 YAML 挂载条目**。安装包已包含构建产物，不需要用户克隆源码或编译。
@@ -70,7 +70,7 @@ dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/relea
 也可以从 [Releases](https://github.com/Cans518/dsh-chat-prune/releases) 下载 `.tgz`，使用实际文件路径安装：
 
 ```powershell
-dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.4.4.tgz"
+dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.4.5.tgz"
 ```
 
 ### 从源码安装
@@ -84,7 +84,7 @@ npm ci --legacy-peer-deps
 npm run build
 npm test
 npm pack
-$pluginPackage = (Resolve-Path '.\dsh-chat-prune-0.4.4.tgz').Path
+$pluginPackage = (Resolve-Path '.\dsh-chat-prune-0.4.5.tgz').Path
 dsh plugin --profile desktop add $pluginPackage
 ```
 
@@ -166,7 +166,7 @@ dsh plugin --profile desktop add $pluginPackage
 
 ```powershell
 dsh plugin --profile desktop remove dsh-delete-chat
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.4/dsh-chat-prune-0.4.4.tgz
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.4.5/dsh-chat-prune-0.4.5.tgz
 ```
 
 需要恢复设置时，只将 `backup`、`allowRunning`、`icon` 的值填入新插件的配置文件，保留新版的 `id` 和 `name`；不要用旧文件覆盖整个新文件。然后重新打开 DSH。已有会话和 `deleted-sessions` 备份目录不受改名影响。请勿同时启用新旧两版。
