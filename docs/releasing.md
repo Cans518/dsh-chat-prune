@@ -2,7 +2,7 @@
 
 返回[项目首页](../README.md) · [参与贡献](../CONTRIBUTING.md)
 
-本文说明 GitHub Release 的自动发布流程，并保留 2026-10-18 核验的商店收录资料。第三方目录的规则和状态可能发生变化，发布成功不代表立即完成商店收录。
+本文说明 GitHub Release 的自动发布流程，商店状态最近于 2026-10-23 核验。第三方目录的规则和状态可能发生变化，发布成功不代表立即完成商店收录。
 
 ---
 
@@ -17,7 +17,7 @@
 
 然后等同步。**没有提交表单，也不用开 PR。**
 
-当前状态（2026-10-18 实测）：
+当前状态（2026-10-23 实测）：
 
 | 项 | 状态 |
 |---|---|
@@ -25,8 +25,16 @@
 | `dsh-plugin` topic | ✅ 已设置 |
 | package.json 规范 | ✅ `dsh plugin add` 真实安装通过 |
 | Release | 已接入自动发布；当前版本见 [Releases](https://github.com/Cans518/dsh-chat-prune/releases/latest) |
-| 1024Store 收录 | ⬜ 0 命中 |
-| dshfind 收录 | ⬜ 0 命中 |
+| 1024Store 收录 | 名称查询 0 命中；接口返回的快照标记为 `stale` |
+| dshfind 收录 | ✅ 精确条目 `Cans518/dsh-chat-prune`，详情已提供 Release 安装命令 |
+
+用户可按固定仓库名称安装，无需等待商店更新版本快照：
+
+```powershell
+dsh plugin --profile desktop add github:Cans518/dsh-chat-prune
+```
+
+DSH 的 `plugin --profile <name>` 将 `add` 及安装源转交 pnpm；当前没有 `dsh add` 插件安装子命令。裸包名 `dsh-chat-prune` 需要先发布同名 npm 包。目前 npm 未发布；商店收录和 GitHub Release 不会自动创建 npm 包。
 
 ---
 

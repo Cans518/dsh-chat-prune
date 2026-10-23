@@ -26,10 +26,17 @@ function fixture(refresh = async () => {}) {
   let entry, component
   const cleanups = [], registrations = new Map()
   const effects = []
+  const timers = new Map()
+  let nextTimer = 0
+  const warnings = []
+  sandbox.setTimeout = (callback) => { timers.set(++nextTimer, callback); return nextTimer }
+  sandbox.clearTimeout = (timer) => timers.delete(timer)
+  sandbox.console = { warn: (...args) => warnings.push(args) }
   const byId = {}
+  const snapshot = { byId, state: 'idle' }
   const ctx = { effect: (effect) => effects.push(effect()), sessions: {
     refresh: () => refresh(byId),
-    list: { getSnapshot: () => ({ byId }) },
+    list: { getSnapshot: () => snapshot },
   }, slots: {
     inject(name, callback) {
       assert.ok(['sidebar.workspaces.session.row.action', 'sidebar.footer.action'].includes(name))
@@ -45,9 +52,79 @@ function fixture(refresh = async () => {}) {
     },
   } }
   module.apply(ctx)
-  return { module, entry, component, window, states, calls, registered, byId, registrations,
+  return { module, entry, component, window, states, calls, registered, byId, snapshot, registrations, timers, warnings,
+    runTimer: async () => {
+      const [id, callback] = timers.entries().next().value
+      timers.delete(id)
+      await callback()
+    },
     cleanup: () => { cleanups.forEach((dispose) => dispose()); effects.forEach((dispose) => dispose()) }, disposed: () => disposed }
 }
+
+test('startup loads the native catalog without opening conversation management', async () => {
+  const f = fixture(async (byId) => { byId['session-history'] = {} })
+  assert.equal(f.byId['session-history'], undefined)
+  assert.equal(f.timers.size, 1)
+  await f.runTimer()
+  assert.ok(f.byId['session-history'])
+  assert.deepEqual(f.calls, [])
+  assert.equal(f.timers.size, 0)
+  f.cleanup()
+})
+
+test('startup retries a rejected catalog request and recovers without a click', async () => {
+  let pulls = 0
+  const f = fixture(async (byId) => {
+    if (++pulls === 1) throw new Error('Host is not ready')
+    byId['session-history'] = {}
+  })
+  await f.runTimer()
+  assert.equal(f.timers.size, 1)
+  await f.runTimer()
+  assert.ok(f.byId['session-history'])
+  assert.equal(pulls, 2)
+  assert.equal(f.timers.size, 0)
+  f.cleanup()
+})
+
+test('startup retries an error snapshot even when refresh resolves', async () => {
+  let pulls = 0
+  const f = fixture(async () => { pulls++ })
+  f.snapshot.state = 'error'
+  await f.runTimer()
+  assert.equal(f.timers.size, 1)
+  f.snapshot.state = 'idle'
+  await f.runTimer()
+  assert.equal(pulls, 2)
+  assert.equal(f.timers.size, 0)
+  f.cleanup()
+})
+
+test('startup stops retrying and reports a persistent catalog failure', async () => {
+  const f = fixture(async () => { throw new Error('Host unavailable') })
+  for (let attempt = 0; attempt < 7; attempt++) await f.runTimer()
+  assert.equal(f.timers.size, 0)
+  assert.equal(f.warnings.length, 1)
+  f.cleanup()
+})
+
+test('unloading cancels a scheduled startup refresh', () => {
+  const f = fixture()
+  assert.equal(f.timers.size, 1)
+  f.cleanup()
+  assert.equal(f.timers.size, 0)
+})
+
+test('unloading during startup does not schedule a retry', async () => {
+  let rejectRefresh
+  const f = fixture(() => new Promise((resolve, reject) => { rejectRefresh = reject }))
+  const pending = f.runTimer()
+  f.cleanup()
+  rejectRefresh(new Error('Disconnected'))
+  await pending
+  assert.equal(f.timers.size, 0)
+  assert.equal(f.warnings.length, 0)
+})
 
 test('manager uses the sidebar footer slot in expanded and collapsed layouts', () => {
   const f = fixture()

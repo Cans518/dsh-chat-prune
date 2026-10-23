@@ -163,7 +163,7 @@ test('manager: real HTTP, retention, metadata round trips, protected batches and
     await manager.getByLabel('至少占用 MiB', { exact: true }).fill('0')
     await manager.getByLabel('至少占用 MiB', { exact: true }).dispatchEvent('change')
     await manager.getByLabel('工作区', { exact: true }).selectOption('')
-    await manager.locator('summary').click()
+    await manager.locator('#dshdc-retention-rules summary').click()
     await manager.getByLabel('每个工作区保留最近条数', { exact: true }).fill('1')
     await manager.getByRole('button', { name: '生成修剪候选', exact: true }).click()
     const selected = await manager.locator('.dshdc-record:has(input:checked)').evaluateAll((elements) => elements.map((element) => element.dataset.sessionId))

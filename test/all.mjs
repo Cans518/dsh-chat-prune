@@ -31,6 +31,7 @@ const LOGIC = [
   'session-management.mjs',
   'agent-lifecycle.mjs',
   'session-sources.mjs',
+  'conversation-storage.mjs',
 ]
 
 const INTEGRATION = [
@@ -68,7 +69,7 @@ const groups = [
 ]
 if (process.argv.includes('--installed')) groups.push(['本机安装集成（验证安装副本）', INTEGRATION])
 if (process.argv.includes('--browser')) groups.push(['Chromium 交互与文件删除集成', ['browser-e2e.mjs', 'manager-e2e.mjs', 'multi-source-e2e.mjs', 'manager-layout.mjs']])
-if (process.argv.includes('--host')) groups.push(['真实 DSH Host 与官方前端集成（独立临时 profile）', ['host-e2e.mjs']])
+if (process.argv.includes('--host')) groups.push(['真实 DSH Host 与官方前端集成（独立临时 profile）', ['host-e2e.mjs', 'conversation-host.mjs']])
 if (process.argv.includes('--install')) groups.push(['真实 DSH CLI 安装、自动启用和卸载（需先 npm pack）', ['install-e2e.mjs']])
 
 for (const group of groups) {

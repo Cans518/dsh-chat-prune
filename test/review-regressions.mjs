@@ -52,7 +52,7 @@ check('H1 检测不可用时放行，而不是一律拒绝（否则等于删不�
     false,
     '又回到「检测不可用就拒绝删除」的硬闸',
   )
-  assert.ok(hostSrc.includes("persistence.open(sessionId, 'write')") || hostSrc.includes("open(sessionId, 'write')"),
+  assert.ok(hostSrc.includes('openForMaintenance(persistence, sessionId)'),
     '缺少持久化写入所有权兜底')
 })
 

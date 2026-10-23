@@ -40,16 +40,24 @@ async function childMain() {
   const persistence = ctx.get('sessionPersistence')
   const registry = ctx.get('workspaceRegistry')
   const workspacePath = join(process.env.DSH_HOME, 'workspace')
-  await mkdir(workspacePath)
+  await mkdir(workspacePath, { recursive: true })
   const workspace = await registry.create(workspacePath, '真实宿主验收')
   const ids = [0, 1, 2].map(() => `session-${randomUUID()}`)
   for (const id of ids) {
     const writer = await persistence.create({
       version: 4, id, createdAt: Date.now(), cwd: workspacePath,
-      isSeeded: false, delegationDepth: 0,
-    })
+      isSeeded: id === ids[2], delegationDepth: 0,
+    }, { inheritedEventCount: id === ids[2] ? 1 : 0 })
+    await writer.append([{ type: 'session/title', seq: 0, time: Date.now(),
+      data: { title: '压缩迁移验收', messageSeqs: [], source: { kind: 'user' } } }])
+    if (id === ids[2]) await writer.append([{
+      type: 'session/end-seed', seq: 1, time: Date.now(), data: { inherited: true },
+    }])
     await writer.flush()
     await writer.close()
+    const sessionDir = dirname(persistence.locate(writer.header).path)
+    await mkdir(join(sessionDir, 'attachments'))
+    await writeFile(join(sessionDir, 'attachments', 'transfer.txt'), '对话附件验收\n'.repeat(20000))
     await workspace.attachSession(id)
   }
   await registry.pinSession(ids[1])
@@ -74,7 +82,9 @@ async function parentMain() {
   const profileDir = join(home, 'profiles', 'audit')
   const installed = join(profileDir, 'node_modules', 'dsh-chat-prune')
   await mkdir(join(installed, 'lib'), { recursive: true })
-  for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'lib/agent-lifecycle.js', 'lib/session-sources.js', 'package.json', 'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
+  for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'lib/agent-lifecycle.js', 'lib/session-sources.js',
+    'lib/conversation-package.js', 'lib/conversation-storage.js', 'lib/conversation-maintenance.js',
+    'package.json', 'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
     await cp(join(sourceRoot, file), join(installed, file))
   }
   for (const dependency of ['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit', '@standard-schema/spec']) {
@@ -229,12 +239,42 @@ async function parentMain() {
     await management.getByRole('button', { name: '关闭', exact: true }).click()
     await management.waitFor({ state: 'detached' })
     console.log('Actual manager archive/unarchive/pin round trips match durable workspace state')
+    await managerEntry.click()
+    await management.getByRole('searchbox').fill(ready.ids[0])
+    await management.locator('.dshdc-record input[type="checkbox"]').check()
+    await management.getByLabel('批量操作', { exact: true }).selectOption('compress')
+    await management.getByRole('button', { name: '预览所选操作', exact: true }).click()
+    await page.locator('#dshdc-batch-preview').getByRole('button', { name: '确认压缩记录', exact: true }).click()
+    await page.waitForFunction(() => document.querySelector('#dshdc-manager-notice')?.textContent.includes('成功 1，失败 0'))
+    const compressed = await page.evaluate(async (sessionId) =>
+      (await (await fetch('/dsh-chat-prune/sessions')).json()).sessions.find((row) => row.id === sessionId), ready.ids[0])
+    assert.equal(compressed.compressed, true, JSON.stringify(compressed))
+    assert.ok(compressed.originalBytes - compressed.bytes > 100000, JSON.stringify(compressed))
+    await management.locator('.dshdc-record input[type="checkbox"]').check()
+    await management.getByLabel('批量操作', { exact: true }).selectOption('export')
+    await management.getByRole('button', { name: '预览所选操作', exact: true }).click()
+    const downloading = page.waitForEvent('download')
+    await page.locator('#dshdc-batch-preview').getByRole('button', { name: '确认导出压缩包', exact: true }).click()
+    const download = await downloading
+    assert.match(download.suggestedFilename(), /\.dsh-chat\.gz$/)
+    await download.saveAs(join(home, 'exported.dsh-chat.gz'))
+    console.log('Actual manager compresses selected records and downloads their compressed package')
+    await page.reload()
+    await managerEntry.waitFor()
+    const compressedGroup = page.locator(`[data-row-key="workspace:${ready.workspaceId}"]`)
+    if (await compressedGroup.getAttribute('aria-expanded') === 'false') await compressedGroup.click()
     const row = page.locator(`[data-row-key="session:${ready.ids[0]}"]`)
     await row.waitFor({ timeout: 15000 })
     await row.click()
     await page.waitForFunction(async (id) =>
       (await (await fetch('/dsh-chat-prune/sessions')).json()).sessions.some((entry) => entry.id === id && entry.releasable),
     ready.ids[0])
+    const restored = await page.evaluate(async (sessionId) =>
+      (await (await fetch('/dsh-chat-prune/sessions')).json()).sessions.find((row) => row.id === sessionId), ready.ids[0])
+    assert.equal(restored.compressed, undefined)
+    const restoredDir = join(home, 'sessions', restored.workspaceSlug, ready.ids[0])
+    assert.equal(await readFile(join(restoredDir, 'attachments', 'transfer.txt'), 'utf8'), '对话附件验收\n'.repeat(20000))
+    console.log('Compressed record survives official frontend reload and restores its full attachment on native open')
     await page.locator(`[data-row-key="session:${ready.ids[1]}"]`).click()
     await row.hover()
     await row.locator('.dshdc-native-del').waitFor({ state: 'visible', timeout: 15000 })

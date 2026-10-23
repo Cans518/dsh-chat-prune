@@ -29,6 +29,8 @@ DSH Chat Prune 是一个社区维护的对话管理插件。它在 DSH NEXT 侧�
 | 侧边栏入口 | 删除单条对话，或从底部打开管理窗口；适配展开与折叠状态 |
 | 搜索与筛选 | 按标题、工作区、会话 ID、来源、状态、更新时间和大小查找记录 |
 | 批量管理 | 跨页选择，批量归档、取消归档、置顶、取消置顶或删除 |
+| 对话压缩 | 手动压缩，按未更新时间自动压缩；打开时按需恢复，清理可重建的投影缓存 |
+| 导出与迁移 | 批量下载对话压缩包，在新环境安装插件后导入内容、附件与置顶/归档状态 |
 | 保留规则 | 每个工作区保留最近 N 条，只选择早于指定天数的候选记录 |
 | 多来源管理 | 合并多个 DSH 数据目录；连接各自的本机宿主后统一操作 |
 | 预览与备份 | 执行前核对完整目标，逐条反馈结果，可停止后续操作 |
@@ -47,15 +49,23 @@ DSH Chat Prune 是一个社区维护的对话管理插件。它在 DSH NEXT 侧�
 先启动一次 DSH NEXT 完成 profile 初始化，再从系统托盘正常退出。使用桌面版提供的命令安装：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.5.0/dsh-chat-prune-0.5.0.tgz
+dsh plugin --profile desktop add github:Cans518/dsh-chat-prune
 ```
 
-重新打开 DSH 即可使用。安装包已包含构建产物，安装时会自动启用插件，无需克隆仓库、编译或手动添加 YAML 挂载条目。
+重新打开 DSH 即可使用。仓库已包含构建产物，安装时会自动启用插件，无需克隆仓库、编译或手动添加 YAML 挂载条目。再次执行同一命令可安装仓库当前版本。
+
+需要固定到本次发布版本时：
+
+```powershell
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.6.0/dsh-chat-prune-0.6.0.tgz
+```
+
+插件名称为 `dsh-chat-prune`，GitHub 安装源为 `github:Cans518/dsh-chat-prune`。当前未发布 npm 包，因此请使用上述完整命令；`dsh add dsh-chat-prune` 不是 DSH 的插件安装语法。
 
 也可以在 [Releases](https://github.com/Cans518/dsh-chat-prune/releases/latest) 下载 `.tgz` 和 `SHA256SUMS.txt`，校验后从本地安装：
 
 ```powershell
-dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.5.0.tgz"
+dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.6.0.tgz"
 ```
 
 终端找不到 `dsh` 时，请先启用 DSH NEXT 桌面版的命令行入口，再重新打开终端。使用 Web profile 时将 `desktop` 换成 `web`；请安装到实际使用的 profile。
@@ -80,6 +90,14 @@ dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.5.0.tgz"
 “最近 N 条”按每个来源中的整个工作区计算。置顶、运行中、无法安全释放、记录缺失或时间未知的对话受保护。
 
 多来源连接、筛选规则、备份配置和常见问题见[使用指南](./docs/user-guide.md)。
+
+### 压缩与迁移对话
+
+在管理窗口选择一条或多条对话，从“批量操作”选择“压缩记录”并预览确认。压缩记录仍保留在原生对话列表，打开时自动恢复，也可手动选择“解压记录”。
+
+展开“压缩与迁移”，设置多少天未更新后自动压缩，保存后宿主每分钟检查一次；`0` 表示关闭。批量操作中的“导出压缩包”下载 `.dsh-chat.gz` 文件；在新环境安装并启用插件后，在同一区域选择文件并点击“导入对话压缩包”。
+
+每次导出选择同一来源；导入写入当前环境的“导入的对话”工作区，已有 ID 会拒绝导入。压缩包上限、保护规则和恢复说明见[压缩与迁移](./docs/user-guide.md#压缩与迁移)。
 
 ## 数据安全与备份
 

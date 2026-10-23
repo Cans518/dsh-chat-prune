@@ -298,7 +298,7 @@ async function main() {
     assert.equal(routes.length, 1)
     assert.equal(routes[0].kind, 'prefix')
     assert.equal(routes[0].path, '/dsh-chat-prune')
-    assert.equal(effects.length, 3, '应有 agent handles + routes + index injection 三个 effect')
+    assert.equal(effects.length, 5, '应注册 agent handles、压缩读取、自动压缩、路由和 index injection')
   })
 
   await test('订阅了 webserver/index-inject 并推入内联 script 行', () => {

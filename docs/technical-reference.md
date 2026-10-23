@@ -51,7 +51,11 @@
 | GET | `/dsh-chat-prune/sessions` | 对话名单、配置、加载保护及 `missing` 标记 |
 | POST | `/dsh-chat-prune/sources` | `{ "name": "...", "home": "绝对数据根目录", "endpoint": "本机 HTTP 地址（可选）" }`，新增或更新来源 |
 | DELETE | `/dsh-chat-prune/sources` | `{ "sourceId": "..." }`，移除来源设置，保留对话数据 |
-| POST | `/dsh-chat-prune/sessions/action` | `{ "sessionId": "...", "action": "archive|unarchive|pin|unpin" }`，经宿主工作区服务执行 |
+| POST | `/dsh-chat-prune/sessions/action` | `{ "sessionId": "...", "action": "archive|unarchive|pin|unpin|compress|decompress" }` |
+| POST | `/dsh-chat-prune/compression` | `{ "afterDays": 30 }`，保存当前来源的自动压缩规则，0 关闭 |
+| POST | `/dsh-chat-prune/compression/run` | 立即检查自动规则，返回压缩、跳过数及逐条错误 |
+| POST | `/dsh-chat-prune/conversations/export` | `{ "sessionIds": ["..."], "sourceId": "local" }`，返回文件名及 base64 压缩包 |
+| POST | `/dsh-chat-prune/conversations/import` | 原始 gzip 请求体，导入当前来源，返回 `imported` ID 列表 |
 | DELETE | `/dsh-chat-prune/sessions` | JSON 请求体 `{ "sessionId": "session-..." }` |
 | DELETE | `/dsh-chat-prune/sessions/<id>` | 删除指定对话 |
 | GET | `/dsh-chat-prune/client.js` | 构建后的普通客户端脚本 |
@@ -74,6 +78,16 @@
 JSON 形式的删除请求可附带 `backup: true` 临时开启备份，无法关闭宿主已开启的全局备份。批量客户端同时提交 `protectPinned: true`、预览时的 `expectedMtime` 和 `expectedRevision`；后者是完整文件清单中相对路径、大小、mtime、ctime 的 SHA256 指纹，能检测最新时间不变的文件增删或变化，不是文件内容摘要。宿主在串行队列中及删除前核对，批量模式强制保留运行中及无法安全释放的会话，忽略全局 `allowRunning` 放宽配置。置顶在耗时扫描后及移除前复查；宿主未提供跨元数据和目录的条件删除事务，不能将此复查当成跨进程原子锁。单条删除保留原有配置语义。
 
 管理操作与删除共用每个 home 的串行队列。归档使用宿主默认活动检查，不传强制停止选项；归档清除 pin、unarchive 不恢复 pin，错误向客户端传播。每个请求各自提交，整批不构成原子事务。停止任务仅停止尚未发出的请求，不能回滚当前请求。
+
+## 压缩存储与迁移
+
+压缩目录保留 `.dsh-conversation.gz` 与 `.dsh-conversation.json`：前者是带版本及文件 SHA-256 的完整对话包，后者包含标题、原更新时间、原大小及持久化 catalog 快照。先发布完整压缩包，再移除原文件，恢复时先逐个原子发布文件，最后移除压缩包。已有不同内容的目标文件会拒绝恢复；断点重试不会直接覆盖它们。文件系统操作不提供断电事务保证。
+
+压缩、导出、导入及原生打开与删除共用当前 home 的串行队列。压缩和导出先释放可跟踪的空闲 agent，再持有公开 write handle；自动压缩在队列内重新核对年龄、置顶与占用。持久化适配保留调用方 receiver，在 `open` 前恢复文件，并通过 `list`、`stat` 补齐压缩记录的 catalog；卸载时恢复原方法。在线删除绕过该排队包装器，避免重复进入同一队列。该适配已针对本机 `0.2.1-rc.2` 持久化后端验证，未来宿主接口变化仍需重新验收。
+
+对话包为 gzip 压缩的 JSON：`format: "dsh-chat-prune"`、`version: 1`、`sessions`。每条包含逻辑 header、事件、继承事件数量及原文件；每个文件记录相对路径、base64 内容、mtime 和 SHA-256。编码与解码使用相同的路径、大小写冲突及数量校验。输入限制 64 MiB、解压 JSON 限制 256 MiB，拒绝路径穿越、Windows 保留设备名、锁文件、内部压缩路径、大小写别名及文件/目录冲突。base64 与 JSON 会增加临时内存开销，适合分批迁移。
+
+导入先校验整个包及所有现存 ID，再调用 `workspaceRegistry.create`、`sessionPersistence.create`、writer `append/flush/close` 与 `workspace.attachSession`；通过 `locate(header)` 定位附件目标。新 header 使用当前环境的工作路径，历史事件保持不变，事件内历史绝对路径不会改写。每条导入独立提交，中途失败返回 `partial`、`imported` 和出错 ID；不回滚已创建记录，也不恢复旧机器的整个 workspace.json。
 
 保留规则在每个来源的整个工作区按 `mtime` 降序、同时间按完整 key 升序选出最近 N 条，在当前筛选范围内排除保留项、置顶、受保护、缺失、时间未知及未达到天数的条目；未连接来源不自动选中。最终确认预览前重新计算；执行时再次校验每个目标。规则本身只返回候选，不执行操作。
 
@@ -103,6 +117,9 @@ dshChatPrune.probe(document.elementFromPoint(x, y))
 - `client-slot.js`：宿主原生模块，注入 `slots` 和 `sessions` 服务，将删除组件注册到 `sidebar.workspaces.session.row.action`，管理入口注册到 `sidebar.footer.action`，根据 `wide` 展示文字或图标。
 - `lib/agent-lifecycle.js`：保留并释放原有 AgentHandle，适配 Cordis 服务代理身份。
 - `lib/session-sources.js`：来源路径配置、本机宿主校验、合并名单和按来源转发变更。
+- `lib/conversation-package.js`：版本化 gzip 对话包、内容校验与输入边界。
+- `lib/conversation-storage.js`：会话快照、压缩文件发布及按需恢复。
+- `lib/conversation-maintenance.js`：持久化适配、自动压缩、导出与导入编排。
 
 原生组件直接接收会话 ID。兼容层优先读取 `data-row-key="session:..."`，只有无明确 ID 的旧界面才使用唯一标题匹配；重复标题不会猜测目标。
 

@@ -179,6 +179,7 @@ async function requestJson(url, init = {}) {
       error.definitive = true
       error.outcomeUnknown = data?.outcomeUnknown === true
       error.partial = data?.partial
+      error.imported = data?.imported
       error.backupDir = data?.backupDir
       throw error
     }
@@ -214,6 +215,7 @@ async function refreshTitleMap(force = false) {
       byTitle.set(key, byTitle.has(key) ? null : row.id)
     }
     titleMap = { byTitle, fetchedAt: now, sessions: rows, config: data.config || {},
+      compression: data.compression,
       canDetectRunning: data.canDetectRunning, hostVersion: data.version, actions: data.actions || [],
       managementVersion: data.managementVersion, sources: data.sources || [] }
     return titleMap

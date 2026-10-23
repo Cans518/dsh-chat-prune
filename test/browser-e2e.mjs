@@ -241,7 +241,7 @@ test('Chromium: injected plugin, real HTTP routes and isolated session storage',
       assert.equal(await manager.locator('#dshdc-notice').count(), 1,
         'Opening a modal must keep the existing notice dismissible')
       await manager.getByRole('button', { name: '关闭提示' }).click()
-      assert.equal(await manager.locator('.dshdc-record button').first().isEnabled(), true,
+      assert.equal(await manager.locator('.dshdc-record[data-session-id="session-duplicate-b"] button').isEnabled(), true,
         'Missing agents service must not disable cold sessions')
       await page.evaluate(() => window.dshChatPrune.notify('管理窗口中的失败', { tone: 'error' }))
       await manager.getByRole('button', { name: '关闭提示' }).click()

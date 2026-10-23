@@ -117,7 +117,8 @@ test('HTTP exposes capability gating, validates preview timestamp and cannot dis
     }, { writeHead(value) { status = value }, end(value) { body = JSON.parse(value) } })
     return { status, body }
   }
-  assert.deepEqual((await request('GET', 'sessions')).body.actions, ['archive', 'unarchive', 'pin', 'unpin'])
+  assert.deepEqual((await request('GET', 'sessions')).body.actions,
+    ['archive', 'unarchive', 'pin', 'unpin', 'compress', 'decompress', 'export'])
   assert.equal((await request('GET', 'sessions')).body.managementVersion, 1)
   assert.equal((await request('POST', 'sessions/action', { sessionId: 'session-one', action: 'archive' })).status, 200)
   assert.equal((await request('DELETE', 'sessions', { sessionId: 'session-one', expectedMtime: -1 })).status, 400)

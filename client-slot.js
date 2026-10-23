@@ -75,8 +75,31 @@ window.__ModuleLoader__.load({
         }
       }
       ctx.effect(() => {
+        let disposed = false
+        let retryTimer
+        const refreshAtStartup = async (attempt = 0) => {
+          try {
+            await refreshSessions()
+            // The host can publish an error snapshot without rejecting refresh().
+            const snapshot = ctx.sessions.list.getSnapshot()
+            if (snapshot.state === 'error') {
+              throw snapshot.error || new Error('Session catalog is not ready')
+            }
+          } catch (error) {
+            if (disposed) return
+            if (attempt < 6) {
+              retryTimer = setTimeout(() => refreshAtStartup(attempt + 1), 800 * (attempt + 1))
+            } else {
+              console.warn('[dsh-chat-prune] Startup session refresh failed', error)
+            }
+          }
+        }
         window.__dshChatPruneRefreshSessions__ = refreshSessions
+        // Run after client services finish applying, independently of the manager.
+        retryTimer = setTimeout(() => refreshAtStartup(), 0)
         return () => {
+          disposed = true
+          clearTimeout(retryTimer)
           if (window.__dshChatPruneRefreshSessions__ === refreshSessions) {
             delete window.__dshChatPruneRefreshSessions__
           }

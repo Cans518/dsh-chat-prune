@@ -234,6 +234,7 @@ export function showConversationManager(services) {
   filterActions.append(advancedToggle, reset)
   filterTools.append(statusFilters, filterActions)
   const rules = node('details', undefined, 'dshdc-rules')
+  rules.id = 'dshdc-retention-rules'
   const ruleSummary = node('summary')
   ruleSummary.append(managerIcon('shield'), node('span', text('按保留规则修剪', 'Prune with retention rules')),
     node('span', text('先生成候选，再预览确认', 'Review candidates before making changes'), 'dshdc-rule-caption'))
@@ -243,6 +244,7 @@ export function showConversationManager(services) {
     advanced.hidden = false
     advancedToggle.setAttribute('aria-expanded', 'true')
     rules.open = reveal
+    rulesToggle.setAttribute('aria-expanded', String(reveal))
     if (rules.open) rules.scrollIntoView({ block: 'nearest', behavior: 'instant' })
   })
   rulesToggle.prepend(managerIcon('shield'))
@@ -272,6 +274,67 @@ export function showConversationManager(services) {
       `${selected.size} candidates, about ${formatBytes(candidates.reduce((sum, row) => sum + row.bytes, 0))}. Protected: ${plan.skipped.pinned} pinned, ${plan.skipped.loaded} running or protected, ${plan.skipped.missing} missing, ${plan.skipped.recent} retained, ${plan.skipped.age} too recent. Review before proceeding.`)
   })
   rules.append(ruleFields, ruleHint, prune)
+  const compressionPanel = node('details', undefined, 'dshdc-rules')
+  compressionPanel.id = 'dshdc-compression'
+  compressionPanel.append(node('summary', text('压缩与迁移', 'Compression and transfer')))
+  const compressionFields = node('div', undefined, 'dshdc-filters')
+  const compressionDays = number(text('多少天未更新后自动压缩（0 为关闭）', 'Auto-compress after days without updates (0 disables)'), 0, compressionFields)
+  compressionDays.max = '36500'
+  const compressionNotice = node('p', undefined, 'dshdc-hint')
+  const runStorageTask = async (work) => {
+    if (busy || loading || !beginBatch()) return
+    busy = true
+    setBusyControls()
+    try {
+      compressionNotice.textContent = text('正在处理…', 'Working…')
+      const result = await work()
+      await load()
+      compressionNotice.textContent = result
+    } catch (error) {
+      await load()
+      compressionNotice.textContent = error.message + (error.partial
+        ? text(`\n已完成 ${error.imported?.length || 0} 条，请检查列表后再重试。`,
+          `\n${error.imported?.length || 0} completed. Check the list before retrying.`) : '')
+    }
+    finally {
+      busy = false
+      endBatch()
+      if (!closed) { setBusyControls(); render() }
+    }
+  }
+  const saveCompression = button(text('保存自动压缩设置', 'Save compression settings'), () => {
+    if (!compressionDays.checkValidity()) { compressionDays.reportValidity(); return }
+    runStorageTask(async () => {
+      await request(`${apiBase}/compression`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ afterDays: Number(compressionDays.value) }) })
+      return text('已保存。宿主运行期间每分钟检查一次。', 'Saved. Checks run every minute while the host is running.')
+    })
+  })
+  const runCompression = button(text('立即检查自动压缩', 'Check automatic compression now'), () => runStorageTask(async () => {
+    const result = await request(`${apiBase}/compression/run`, { method: 'POST' })
+    return text(`已压缩 ${result.compressed} 条，跳过 ${result.skipped} 条，失败 ${result.errors.length} 条。`,
+      `${result.compressed} compressed, ${result.skipped} skipped, ${result.errors.length} failed.`) +
+      result.errors.map((entry) => `\n${entry.sessionId}: ${entry.error}`).join('')
+  }))
+  const importFile = field(text('对话压缩包', 'Conversation package'), node('input'), compressionFields)
+  importFile.type = 'file'
+  importFile.accept = '.gz,application/gzip'
+  const importPackage = button(text('导入对话压缩包', 'Import conversation package'), () => {
+    const file = importFile.files?.[0]
+    if (!file) { compressionNotice.textContent = text('请先选择压缩包。', 'Choose a package first.'); return }
+    if (file.size > 64 * 1024 * 1024) { compressionNotice.textContent = text('压缩包不能超过 64 MiB。', 'Packages must be at most 64 MiB.'); return }
+    runStorageTask(async () => {
+      const result = await request(`${apiBase}/conversations/import`, {
+        method: 'POST', headers: { 'content-type': 'application/gzip' }, body: await file.arrayBuffer(),
+      })
+      importFile.value = ''
+      return text(`已导入 ${result.imported.length} 条对话。`, `${result.imported.length} conversations imported.`)
+    })
+  })
+  compressionPanel.append(compressionFields, node('p', text(
+    '自动压缩仅作用于当前来源，跳过置顶和受保护的会话。打开对话时自动解压。选择列表中的对话可手动压缩或批量导出；每次导出选择同一来源。导入到当前环境的新工作区，保留标题、内容和附件；已有 ID 会拒绝导入。',
+    'Automatic compression applies to this source and skips pinned and protected records. Opening a conversation restores it. Select records to compress or export; export one source at a time. Import restores titles, content and attachments into a local workspace; existing IDs are rejected.'), 'dshdc-hint'),
+  saveCompression, runCompression, importPackage, compressionNotice)
   const toolbar = node('div', undefined, 'dshdc-list-toolbar')
   const selectPage = node('input')
   selectPage.type = 'checkbox'
@@ -309,6 +372,8 @@ export function showConversationManager(services) {
     ['archive', text('归档', 'Archive')], ['unarchive', text('取消归档', 'Unarchive')],
     ['pin', text('置顶', 'Pin')], ['unpin', text('取消置顶', 'Unpin')],
     ['delete', text('删除记录', 'Delete records')],
+    ['compress', text('压缩记录', 'Compress records')], ['decompress', text('解压记录', 'Decompress records')],
+    ['export', text('导出压缩包', 'Export package')],
   ], operations)
   const backup = node('input')
   backup.type = 'checkbox'
@@ -351,7 +416,7 @@ export function showConversationManager(services) {
   const body = node('div', undefined, 'dshdc-manager-body')
   const controls = node('div', undefined, 'dshdc-manager-controls')
   advanced.append(rules)
-  controls.append(stats, sourceTools, sourcePanel, filters, filterTools, advanced)
+  controls.append(stats, sourceTools, sourcePanel, filters, filterTools, advanced, compressionPanel)
   const listSection = node('section', undefined, 'dshdc-list-section')
   const listScroller = node('div', undefined, 'dshdc-records-scroll')
   listScroller.tabIndex = 0
@@ -429,6 +494,9 @@ export function showConversationManager(services) {
       choice.badge.textContent = String(choice.count())
     }
     clearSearch.hidden = !search.value
+    for (const control of [compressionDays, importFile, saveCompression, runCompression, importPackage]) {
+      control.disabled = busy || loading || !map.compression
+    }
     records.replaceChildren()
     for (const row of visible.slice(page * pageSize, (page + 1) * pageSize)) {
       const item = node('div', undefined, 'dshdc-record')
@@ -477,6 +545,7 @@ export function showConversationManager(services) {
         identity.append(path)
       }
       const badges = [
+        row.compressed && ['compressed', text('已压缩', 'Compressed')],
         row.archived && ['archived', text('已归档', 'Archived')],
         row.pinned && ['pinned', text('已置顶', 'Pinned')],
         row.running && ['protected', t('manage.running')],
@@ -558,6 +627,7 @@ export function showConversationManager(services) {
       map = await loadSessions()
       if (closed) return
       rows = map.sessions || []
+      compressionDays.value = String(map.compression?.afterDays || 0)
       hasLoaded = true
       sourceList.replaceChildren()
       for (const entry of map.sources || []) {
@@ -651,7 +721,9 @@ export function showConversationManager(services) {
         .filter((row) => selected.has(sessionKey(row)))
       const eligible = targets.filter((row) => !row.readOnly && (action === 'delete'
         ? !row.pinned && !row.running
-        : (row.actions || map.actions)?.includes(action)))
+        : (row.actions || map.actions)?.includes(action) &&
+          (!['compress', 'decompress', 'export'].includes(action) || !row.running) &&
+          (action !== 'compress' || !row.compressed) && (action !== 'decompress' || row.compressed)))
       const skipped = selected.size - eligible.length
       if (!eligible.length) {
         message.textContent = text('所选会话均已消失或受到保护，没有可执行目标。', 'All selected records are gone or protected; nothing to execute.')
@@ -660,6 +732,25 @@ export function showConversationManager(services) {
       const label = operation.selectedOptions[0].textContent
       const useBackup = backup.checked || map.config?.backup === true
       if (!await confirmBatch(eligible, { action, label, skipped, useBackup })) return
+      if (action === 'export') {
+        const sourceIds = new Set(eligible.map((row) => row.sourceId || 'local'))
+        if (sourceIds.size !== 1) throw new Error(text('请每次选择同一来源的对话导出。', 'Select one source per export.'))
+        const result = await request(`${apiBase}/conversations/export`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionIds: eligible.map((row) => row.id), sourceId: [...sourceIds][0] }),
+        })
+        const bytes = Uint8Array.from(atob(result.archive), (char) => char.charCodeAt(0))
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/gzip' }))
+        const anchor = node('a')
+        anchor.href = url
+        anchor.download = result.filename
+        dialog.append(anchor)
+        anchor.click()
+        anchor.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 60000)
+        message.textContent = text(`已导出 ${eligible.length} 条对话。`, `${eligible.length} conversations exported.`)
+        return
+      }
       stop.hidden = false
       stop.disabled = false
       progressStatus.hidden = false
@@ -680,7 +771,9 @@ export function showConversationManager(services) {
               ? { sessionId: row.id, sourceId: row.sourceId, backup: useBackup, protectPinned: true, expectedMtime: row.mtime, expectedRevision: row.revision }
               : { sessionId: row.id, sourceId: row.sourceId, action }),
           })
-          outcomes.push({ row, state: 'success', detail: response.backupDir ? `${t('manage.backup')}${response.backupDir}` : '' })
+          outcomes.push({ row, state: 'success', detail: response.skipped === 'noSpaceSaved'
+            ? text('原记录已压缩，进一步压缩无法节省空间。', 'Further compression would not save space.')
+            : response.backupDir ? `${t('manage.backup')}${response.backupDir}` : '' })
           selected.delete(sessionKey(row))
         } catch (error) {
           const unknown = error.outcomeUnknown === true || error.name === 'AbortError'

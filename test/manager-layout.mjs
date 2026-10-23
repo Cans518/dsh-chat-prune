@@ -177,7 +177,7 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
     await page.setViewportSize({ width: 1400, height: 950 })
     const shortcut = manager.getByRole('button', { name: '保留规则', exact: true })
     await shortcut.click()
-    await manager.locator('.dshdc-rules[open]').waitFor()
+    await manager.locator('#dshdc-retention-rules[open]').waitFor()
     assert.equal(await shortcut.getAttribute('aria-expanded'), 'true')
     await manager.getByLabel('每个工作区保留最近条数', { exact: true }).fill('1')
     await manager.getByLabel('只修剪早于多少天的记录', { exact: true }).fill('0')
@@ -190,7 +190,7 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
     await manager.getByRole('button', { name: '更多筛选', exact: true }).click()
     assert.equal(await shortcut.getAttribute('aria-expanded'), 'false')
     await shortcut.click()
-    assert.equal(await manager.locator('.dshdc-rules').evaluate((element) => element.open), true,
+    assert.equal(await manager.locator('#dshdc-retention-rules').evaluate((element) => element.open), true,
       'Reopening hidden rules reveals the existing panel')
     await manager.getByRole('button', { name: '更多筛选', exact: true }).click()
   })

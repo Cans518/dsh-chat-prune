@@ -21,6 +21,7 @@ if ('dsh-chat-prune' -notin @($profilePackage.dsh.profile.bundles)) {
 }
 $runtimeFiles = @(
   'lib/index.js', 'lib/pruning-policy.js', 'lib/agent-lifecycle.js', 'lib/session-sources.js', 'client-core.js', 'client-manager.js', 'client.js', 'client-slot.js', 'package.json',
+  'lib/conversation-package.js', 'lib/conversation-storage.js', 'lib/conversation-maintenance.js',
   'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'LICENSE',
   'assets/icon.svg', 'docs/technical-reference.md', 'docs/user-guide.md', 'docs/releasing.md', 'docs/development-history.md'
 )

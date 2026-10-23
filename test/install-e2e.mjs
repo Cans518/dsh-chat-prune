@@ -112,7 +112,9 @@ if (process.argv[2] === '--cli') {
     assert.equal(saved.dependencies['dsh-delete-chat'], undefined)
     assert.deepEqual(saved.dsh.profile.bundles, [...initialBundles, manifest.name])
     assert.equal(await readFile(join(profile, 'cordis.patch.yml'), 'utf8'), '[]\n')
-    for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
+    for (const file of ['lib/index.js', 'lib/pruning-policy.js',
+      'lib/conversation-package.js', 'lib/conversation-storage.js', 'lib/conversation-maintenance.js',
+      'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
       assert.equal(await readFile(join(installed, file), 'utf8'), await readFile(join(sourceRoot, file), 'utf8'))
     }
     await runChild(home, '--boot', [manifest.version], 'boot.log')
