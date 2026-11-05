@@ -97,7 +97,7 @@ npm run test:install   # 期望最后一行 DSH_ADD_INSTALL_PASS
 # 同步 package.json、package-lock.json 的版本和 README 下载链接，再重建 client.js
 npm run build
 git add -A
-git commit -m "release: v0.5.0"
+git commit -m "release: v0.6.0"
 git push origin main
 ```
 
@@ -134,7 +134,7 @@ gh repo edit Cans518/dsh-chat-prune --add-topic dsh-plugin
 gh workflow run release.yml --repo Cans518/dsh-chat-prune --ref main
 
 # 发布已有 tag（用于标签已推送、但此前发布失败的情况）
-gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.5.0
+gh workflow run release.yml --repo Cans518/dsh-chat-prune -f tag=v0.6.0
 ```
 
 ---
@@ -154,8 +154,8 @@ Runner 上: 8b710ba1f3a1285a23e988654f778a1a6bd5f467cf0844081d5c4279ce3dc7d5
 
 ```powershell
 # 正确用法：拿发布页的 SHA256SUMS.txt 校验下载的文件
-Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.5.0/SHA256SUMS.txt -OutFile sums.txt
-Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.5.0/dsh-chat-prune-0.5.0.tgz -OutFile p.tgz
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.6.0/SHA256SUMS.txt -OutFile sums.txt
+Invoke-WebRequest https://github.com/Cans518/dsh-chat-prune/releases/download/v0.6.0/dsh-chat-prune-0.6.0.tgz -OutFile p.tgz
 Get-FileHash p.tgz -Algorithm SHA256
 Get-Content sums.txt
 ```

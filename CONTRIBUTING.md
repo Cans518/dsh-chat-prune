@@ -58,9 +58,9 @@ npm run test:host
 
 ```text
 .github/       CI、发布工作流与 Issue 模板
-assets/        项目图标
+assets/        项目图标与文档截图素材
 docs/          使用指南、技术说明、发布流程与历史验证依据
-lib/           宿主服务与删除逻辑
+lib/           宿主服务、会话存储、多来源与平滑重启逻辑
 scripts/       构建、元数据校验、本地安装、重启与商店查询工具
 test/          逻辑、浏览器和宿主集成测试
 client-core.js 客户端共享逻辑

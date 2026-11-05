@@ -1,135 +1,179 @@
-# 技术说明
+# 技术说明 (Technical Reference)
 
-普通使用请先阅读 [README](../README.md)。本文说明删除边界、备份恢复及调试接口。
+普通使用与操作指引请先阅读 [使用指南](./user-guide.md)。  
+本文深入说明 DSH Chat Prune 的底层架构、宿主交互契约、物理删除安全性边界、HTTP 接口规范、存储压缩格式以及桌面端平滑重启机制。
 
-## 删除流程
+---
 
-1. 校验对话 ID，扫描实际会话目录，检查路径是否仍处于 DSH 数据目录内。
-2. 拒绝正在运行的会话；对已跟踪且空闲的 agent 调用原 `AgentHandle.dispose()`，等待宿主完成取消、空闲等待、scope 清理、writer 关闭及注册表摘除。没有 live agent 的只读投影不作为写入占用。
-3. 在线时通过宿主 `sessionPersistence.open(id, 'write')` 取得写入所有权，并保持到清理结束；无法完整释放的已加载会话仍被拒绝。
-4. 开启备份时，完整复制会话目录并写入恢复说明；失败则中止。
-5. 删除会话目录、投影缓存及其同名备份。
-6. 通过 `workspaceRegistry` 更新工作区、置顶和归档索引，不直接覆写在线宿主的索引文件。
-7. 客户端调用公开 `sessions.refresh()` 更新正式会话名单，再刷新插件名单。
+## 目录
+- [1. 物理删除流程与安全边界](#1-物理删除流程与安全边界)
+- [2. 备份与灾难恢复机制](#2-备份与灾难恢复机制)
+- [3. 内部 HTTP RPC 接口](#3-内部-http-rpc-接口)
+- [4. 压缩存储与迁移格式规范](#4-压缩存储与迁移格式规范)
+- [5. 桌面端平滑重启架构](#5-桌面端平滑重启架构)
+- [6. 核心模块与职责分工](#6-核心模块与职责分工)
+- [7. 主题变量适配规范](#7-主题变量适配规范)
 
-普通会话和归档会话均使用相同删除流程。删除请求在同一数据目录内串行执行。宿主会话名单仍含目标时，会再刷新一次，避免复用删除前开始的在途查询。
+---
 
-文件和宿主索引不构成一个跨系统事务。如果一部分已经删除，后续步骤失败，界面会报告部分完成情况，并保留备份位置。修复原因后可重试；文件已缺失的索引残留仍可从管理窗口清理。
+## 1. 物理删除流程与安全边界
 
-在线物理删除仅支持已验证的 Windows 所有权机制。POSIX 的锁文件可能随目录删除而失效，因此在线删除明确返回 501。
+为确保绝对不损坏用户数据、不产生脏读或悬挂索引，删除流程设计为严格串行的 7 步守卫：
 
-## 备份与恢复
+1. **路径合法性校验**：  
+   校验对话 ID 格式，定位实际会话物理路径，并通过 `realpath` 验证该目录严格位于宿主当前 DSH 数据根目录内部，拒绝符号链接或目录联接越界。
+2. **活动生命周期检测与优雅释放**：  
+   坚决拒绝正在生成中、执行工具调用或存在外部未完结任务的会话；对已跟踪且处于 `idle` 空闲态的 Agent，调用底层 `AgentHandle.dispose()` 完成空闲等待、scope 清理、writer 关闭及注册表摘除。
+3. **获取宿主排它写锁 (Write Ownership)**：  
+   在线时调用宿主 `sessionPersistence.open(id, 'write')` 取得写入所有权并保持至清理完毕；若宿主因内部被其他模块占用而无法完整释放，坚决拒绝删除。
+4. **全量备份优先保护**：  
+   若开启备份（单条指定或全局开启），先完整克隆会话物理目录至安全区并生成 `restore.json`；若备份出现任何异常，立即阻断并退出整个流程。
+5. **物理目录与缓存移除**：  
+   先解构并安全物理删除会话目录，随后彻底清除对应投影缓存目录（`storages/session_projcache/sessions/<id>.json`）及其备份。
+6. **宿主索引原子更新**：  
+   通过公开的 `workspaceRegistry` API 移除工作区内绑定 ID，同步清理置顶与归档索引。**严禁**在外层直接强行改写在线宿主的 `workspace.json` 文件。
+7. **客户端两阶段刷新**：  
+   调用宿主公开的 `sessions.refresh()` 刷新底层正式会话名单，随后向前端推送变更并重绘插件列表。
 
-开启备份后，目录结构如下；时间标签包含随机标识以避免碰撞：
+> [!CAUTION]
+> **跨平台安全策略**  
+> 在线物理删除依赖 Windows 提供的强制独占文件句柄保护。在 POSIX 系统（macOS/Linux）下，目录移除可能导致锁文件脱离，因此在线物理删除在非 Windows 环境下明确返回 `501 Not Implemented`，保障数据绝对安全。
+
+---
+
+## 2. 备份与灾难恢复机制
+
+### 备份目录结构
+备份数据存放于对应数据根目录的 `deleted-sessions/` 之中。目录名包含毫秒级时间戳与随机唯一摘要，杜绝并发覆盖：
 
 ```text
-<DSH 数据目录>/
+<DSH 数据根目录>/
   deleted-sessions/
-    <时间标签>/
-      restore.json
-      <sessionId>/
-        ...
+    20261106-034500-a1b2c3/
+      restore.json           # 索引恢复指引与元数据
+      session-8a2cf300-.../  # 完整的物理目录，包含所有原始事件与嵌套附件
+        session.v4.jsonl.zstd
+        attachments/
 ```
 
-恢复需要手动操作：
+### 灾难恢复操作准则
+1. **停止宿主**：正常退出 DSH NEXT，建议提前另存一份当前的 `storages/workspace.json`。
+2. **查阅恢复清单**：打开备份目录下的 `restore.json`，核验会话 ID 及其对应的原始路径 `originalPath` 与所属工作区。
+3. **回拷目录**：将备份会话目录复制回 `originalPath`。若原路径已存在同名残留，先另行备份再覆盖。
+4. **恢复索引**：在 `storages/workspace.json` 中找到对应的工作区条目，将该会话 ID 重新加入其 `sessionIds` 列表中；如此前处于置顶或归档态，按需在对应数组补充。
+5. **拉起 DSH**：启动 DSH NEXT，历史对话与附件即刻完整可见。
 
-1. 正常退出 DSH，先备份当前 `storages/workspace.json`。
-2. 阅读对应 `restore.json`，确认对话 ID 和 `originalPath`。
-3. 将备份的会话目录复制回 `originalPath`。原路径已存在时先另存，避免覆盖新记录。
-4. 根据恢复说明，将 ID 放回 `storages/workspace.json` 对应工作区的 `sessionIds`。需要时重新设置置顶或归档。
-5. 重新打开 DSH，确认会话和内容完整。
+---
 
-不要用旧的整个索引直接覆盖新索引，否则可能丢掉之后产生的其他会话索引。`backup: false` 的删除没有插件备份可供恢复。备份不会自动过期。
+## 3. 内部 HTTP RPC 接口
 
-## HTTP 接口
+路由基于宿主自带的 WebServer 认证体系进行转发，仅响应同源或携带安全认证的本地请求。
 
-路由使用宿主的认证转发；客户端使用同源相对路径。
-
-| 方法 | 路径 | 用途 |
+| 方法 | 路径 | 用途与入参规范 |
 |---|---|---|
-| GET | `/dsh-chat-prune/ping` | 插件版本、生效配置和运行检测能力 |
-| GET | `/dsh-chat-prune/sessions` | 对话名单、配置、加载保护及 `missing` 标记 |
-| POST | `/dsh-chat-prune/sources` | `{ "name": "...", "home": "绝对数据根目录", "endpoint": "本机 HTTP 地址（可选）" }`，新增或更新来源 |
-| DELETE | `/dsh-chat-prune/sources` | `{ "sourceId": "..." }`，移除来源设置，保留对话数据 |
-| POST | `/dsh-chat-prune/sessions/action` | `{ "sessionId": "...", "action": "archive|unarchive|pin|unpin|compress|decompress" }` |
-| POST | `/dsh-chat-prune/compression` | `{ "afterDays": 30 }`，保存当前来源的自动压缩规则，0 关闭 |
-| POST | `/dsh-chat-prune/compression/run` | 立即检查自动规则，返回压缩、跳过数及逐条错误 |
-| POST | `/dsh-chat-prune/conversations/export` | `{ "sessionIds": ["..."], "sourceId": "local" }`，返回文件名及 base64 压缩包 |
-| POST | `/dsh-chat-prune/conversations/import` | 原始 gzip 请求体，导入当前来源，返回 `imported` ID 列表 |
-| DELETE | `/dsh-chat-prune/sessions` | JSON 请求体 `{ "sessionId": "session-..." }` |
-| DELETE | `/dsh-chat-prune/sessions/<id>` | 删除指定对话 |
-| GET | `/dsh-chat-prune/client.js` | 构建后的普通客户端脚本 |
-| POST | `/dsh-chat-prune/diag` | 宿主本地的有限大小诊断上报 |
+| `GET` | `/dsh-chat-prune/ping` | 获取插件版本号、当前数据根目录及运行时检测能力 |
+| `GET` | `/dsh-chat-prune/sessions` | 获取全景会话看板数据、运行状态保护标志及 `missing` 标记 |
+| `POST` | `/dsh-chat-prune/sources` | `{ "name": "...", "home": "绝对路径", "endpoint": "本机地址(可选)" }`，添加或更新数据源 |
+| `DELETE` | `/dsh-chat-prune/sources` | `{ "sourceId": "..." }`，仅移除数据源挂载，绝不删除其底下的数据 |
+| `POST` | `/dsh-chat-prune/sessions/action` | `{ "sessionId": "...", "action": "archive\|unarchive\|pin\|unpin\|compress\|decompress" }` |
+| `POST` | `/dsh-chat-prune/compression` | `{ "afterDays": 30 }`，配置并保存当前数据源的自动压缩天数（0 为关闭） |
+| `POST` | `/dsh-chat-prune/compression/run` | 立即触发一轮自动压缩巡检，返回成功、跳过数及明细 |
+| `POST` | `/dsh-chat-prune/conversations/export`| `{ "sessionIds": [...], "sourceId": "local" }`，返回 base64 编码的 `.dsh-chat.gz` |
+| `POST` | `/dsh-chat-prune/conversations/import`| 原始 gzip 请求体，导入并重建会话及附件，返回已导入 ID 列表 |
+| `GET` | `/dsh-chat-prune/restart` | 查询当前宿主是否支持平滑重启及当前正在运行的会话数量 |
+| `POST` | `/dsh-chat-prune/restart` | 启动平滑重启流程（先优雅停机、存盘，再唤醒独立守护进程重启） |
+| `DELETE`| `/dsh-chat-prune/sessions` | JSON 请求体 `{ "sessionId": "..." }` 执行单条或批量删除 |
+| `DELETE`| `/dsh-chat-prune/sessions/<id>` | 路径传参删除指定对话 |
+| `GET` | `/dsh-chat-prune/client.js` | 输出内联构建完成的纯自执行客户端脚本 |
+| `POST` | `/dsh-chat-prune/diag` | 本地有限体积的客户端异常诊断日志回传 |
 
-主要状态码：400 参数或 JSON 无效；409 会话被占用或路径冲突；413 请求体过大；501 系统不支持在线删除；503 宿主服务不可用；500 文件或索引操作失败。
+### 响应状态码规范
+- `200 OK`：请求成功执行。
+- `400 Bad Request`：参数缺失、JSON 解构失败或路径越界。
+- `409 Conflict`：目标会话正处于活动状态、被其他句柄独占占用，或发生文件名/ID 冲突。
+- `413 Payload Too Large`：迁移导入包或数据超出安全边界（上限 64 MiB）。
+- `501 Not Implemented`：操作系统不支持在线安全独占删除（非 Windows 环境）。
+- `503 Service Unavailable`：宿主底层持久化服务暂不可用。
+- `500 Internal Server Error`：底层文件读写或索引写入异常（若发生部分成功，响应体将明确返回 `partial: true`、已删集合及备份路径）。
 
-失败响应可能附带 `partial`、`removed`、`backupDir`。`alreadyGone: true` 仍会检查并清理残留索引。
+---
 
-名单附带 `managementVersion: 1`、`actions` 能力列表，以及每条记录的 `workspaceKey`、工作区显示名 `workspace`、磁盘 slug `workspaceSlug`、`archived` 和 `pinned`。新版批量窗口遇到没有此管理协议标识的旧宿主会禁用批量操作，要求重启生效。`mtime` 为会话目录内非临时普通文件（含嵌套目录）的最大文件修改时间；`bytes` 为这些文件的总大小。目录联接或符号链接会拒绝扫描，不跟随外部路径。扫描中消失的文件使该行快照失效，跳过该行供下次刷新重新读取。
+## 4. 压缩存储与迁移格式规范
 
-`canDetectRunning` 表示是否可以查询 agent 的活动状态，缺少它不会禁用全部单条删除或批量预览，在线删除仍需取得写入所有权。名单的 `running` 为兼容既有客户端而保留的保护标志，包含正在运行的 agent 和无法完整释放的已加载会话；`releasable` 表示当前存在可释放的空闲生命周期句柄。只有已加载、没有已知 agent 注册表的目标仍受保护。
+### 压缩存储结构
+压缩后的会话目录仅包含紧凑结构：
+- `.dsh-conversation.gz`：包含历史事件流、完整附件的 gzip 二进制包（内附文件相对路径与 SHA-256 校验哈希）。
+- `.dsh-conversation.json`：存放标题、更新时间戳、原始体积及 catalog 映射的元数据快照。
 
-`lib/agent-lifecycle.js` 在宿主 registry 的 create/resume 边界保留公开 `AgentHandle`，保留调用方 receiver，从而保持原 Cordis 生命周期所有权。跟踪状态以 `Symbol.for('cordis.original')` 的原始服务对象为键，避免不同调用方代理导致句柄丢失；卸载时恢复方法。只释放与当前 registry agent 身份一致且 `status === 'idle'` 的句柄，释放后重新验证占用，随后仍需取得公开 writer。插件启用前已存在且无法取得句柄的 agent 不会被强制摘除。这一适配经过本机固定宿主实现及真实 Host 流程验证，不保证未来宿主内部 registry 实现不变。
+### 按需无感解压机制
+持久化适配层包装了宿主 `sessionPersistence`：
+- 在调用 `open(id, 'read' | 'write')` 之前，插件侦测目标是否处于压缩态；
+- 若处于压缩态，立即将其原子化释放解压至原目录，并在毫秒级内交还原始 reader/writer；
+- 界面与原生侧边栏完全透明无感知，无需手动解压即可直接点开历史对话继续聊。
 
-合并名单附带 `sources`，每条记录的 `sourceId`、`sourceHome` 和 `key` 标明来源。当前来源为 `local`，其 `key` 保持原 ID；额外来源的 key 和 workspaceKey 包含来源前缀，保留规则及选择不得仅使用裸会话 ID。额外来源的变更请求须提交 `sourceId`；宿主只从已保存的来源中解析目标，不接受变更请求中的任意路径。`GET /sessions?local=1` 只返回该宿主当前目录，供来源聚合使用，避免递归合并。
+### 导出迁移包规范
+导出文件采用通用 `.dsh-chat.gz` 格式：
+- `format` 标识为 `"dsh-chat-prune"`，版本协议 `"version": 1`。
+- 每条记录包含完整的事件历史、多模态附件内容（base64 编码）、文件相对路径与时间戳。
+- 导入流程具备防覆盖阻断机制：遇到任何已存在 ID（含大小写不敏感碰撞），在解压前整体拦截，杜绝污染现有工作区。
 
-来源设置原子写入 `storages/dsh-chat-prune-sources.json`，同进程、同路径的保存串行化。路径先 realpath 并验证 sessions 目录；endpoint 仅接受本机 HTTP 根地址及认证查询参数，连接前和变更前用 ping 核对其 home。未连接的路径只读扫描，不对其他在线宿主的 workspace.json 执行带外写入。已连接来源通过所属宿主执行全部管理操作，保留其备份配置和写入锁；连接响应丢失或 JSON 无法解析时返回 `outcomeUnknown`，批处理停止后续请求。来源列表不包含 endpoint 或认证参数。
+---
 
-JSON 形式的删除请求可附带 `backup: true` 临时开启备份，无法关闭宿主已开启的全局备份。批量客户端同时提交 `protectPinned: true`、预览时的 `expectedMtime` 和 `expectedRevision`；后者是完整文件清单中相对路径、大小、mtime、ctime 的 SHA256 指纹，能检测最新时间不变的文件增删或变化，不是文件内容摘要。宿主在串行队列中及删除前核对，批量模式强制保留运行中及无法安全释放的会话，忽略全局 `allowRunning` 放宽配置。置顶在耗时扫描后及移除前复查；宿主未提供跨元数据和目录的条件删除事务，不能将此复查当成跨进程原子锁。单条删除保留原有配置语义。
+## 5. 桌面端平滑重启架构
 
-管理操作与删除共用每个 home 的串行队列。归档使用宿主默认活动检查，不传强制停止选项；归档清除 pin、unarchive 不恢复 pin，错误向客户端传播。每个请求各自提交，整批不构成原子事务。停止任务仅停止尚未发出的请求，不能回滚当前请求。
+由于 Electron 架构与 DSH 0.2.x 内部并未给插件预留 `app.relaunch()` 的公开通道，插件通过三个紧密协作的模块实现了安全平滑重启：
 
-## 压缩存储与迁移
-
-压缩目录保留 `.dsh-conversation.gz` 与 `.dsh-conversation.json`：前者是带版本及文件 SHA-256 的完整对话包，后者包含标题、原更新时间、原大小及持久化 catalog 快照。先发布完整压缩包，再移除原文件，恢复时先逐个原子发布文件，最后移除压缩包。已有不同内容的目标文件会拒绝恢复；断点重试不会直接覆盖它们。文件系统操作不提供断电事务保证。
-
-压缩、导出、导入及原生打开与删除共用当前 home 的串行队列。压缩和导出先释放可跟踪的空闲 agent，再持有公开 write handle；自动压缩在队列内重新核对年龄、置顶与占用。持久化适配保留调用方 receiver，在 `open` 前恢复文件，并通过 `list`、`stat` 补齐压缩记录的 catalog；卸载时恢复原方法。在线删除绕过该排队包装器，避免重复进入同一队列。该适配已针对本机 `0.2.1-rc.2` 持久化后端验证，未来宿主接口变化仍需重新验收。
-
-对话包为 gzip 压缩的 JSON：`format: "dsh-chat-prune"`、`version: 1`、`sessions`。每条包含逻辑 header、事件、继承事件数量及原文件；每个文件记录相对路径、base64 内容、mtime 和 SHA-256。编码与解码使用相同的路径、大小写冲突及数量校验。输入限制 64 MiB、解压 JSON 限制 256 MiB，拒绝路径穿越、Windows 保留设备名、锁文件、内部压缩路径、大小写别名及文件/目录冲突。base64 与 JSON 会增加临时内存开销，适合分批迁移。
-
-导入先校验整个包及所有现存 ID，再调用 `workspaceRegistry.create`、`sessionPersistence.create`、writer `append/flush/close` 与 `workspace.attachSession`；通过 `locate(header)` 定位附件目标。新 header 使用当前环境的工作路径，历史事件保持不变，事件内历史绝对路径不会改写。每条导入独立提交，中途失败返回 `partial`、`imported` 和出错 ID；不回滚已创建记录，也不恢复旧机器的整个 workspace.json。
-
-保留规则在每个来源的整个工作区按 `mtime` 降序、同时间按完整 key 升序选出最近 N 条，在当前筛选范围内排除保留项、置顶、受保护、缺失、时间未知及未达到天数的条目；未连接来源不自动选中。最终确认预览前重新计算；执行时再次校验每个目标。规则本身只返回候选，不执行操作。
-
-## 客户端诊断
-
-可以在 DSH 的浏览器控制台中使用：
-
-```js
-dshChatPrune.status()
-dshChatPrune.refreshTitles()
-dshChatPrune.openManager()
-dshChatPrune.probe(document.elementFromPoint(x, y))
+```mermaid
+flowchart TD
+    Client["前端侧边栏 / 管理看板"] -->|POST /dsh-chat-prune/restart| Controller["lib/desktop-restart.js<br>(重启控制器)"]
+    Controller -->|1. 触发宿主优雅下线| DshHost["DSH 核心宿主<br>(保存会话、停用任务、卸载插件)"]
+    Controller -->|2. 启动独立后台守护| Watcher["lib/restart-watcher.js<br>(后台守护进程)"]
+    Watcher -->|3. 发送关闭窗口信号| Closer["lib/request-close.ps1<br>(WM_CLOSE)"]
+    Closer -->|4. 等待进程完全退出| HostProc["旧 DSH 进程组"]
+    Watcher -->|5. 确认退出后拉起| NewInstance["全新 DSH NEXT 进程"]
 ```
 
-`status()` 中的 `version` 和 `hostVersion` 用于核对客户端与宿主版本，`nativeRowAction` 表示原生操作按钮是否已接入。刷新插件标题缓存不等于刷新宿主会话名单；界面中的“刷新列表”会同步刷新两者。
+1. **`lib/desktop-restart.js`**：
+   - 侦测当前是否运行在可重启的 Windows 桌面版环境中；
+   - 检查是否有活动任务正在生成，若有则向用户发出醒目确认警示；
+   - 调用宿主 `ctx.dispose()`，确保已打开的会话写入器完成 flush 并关闭，任务优雅停止。
+2. **`lib/restart-watcher.js`**：
+   - 作为一个完全脱离 Node 主事件循环的后台独立子进程启动；
+   - 周期性监听目标 PID 的存活状态；
+   - 在旧进程安全释放并完全退出后，调用原执行文件路径及命令行参数唤醒新客户端。
+3. **`lib/request-close.ps1`**：
+   - 采用标准 Win32 消息循环向 Electron 窗口投递注销级关闭消息，避免暴力杀死进程造成磁盘文件截断。
 
-旧界面的兼容行选择器可通过 `setRowSelectors([...])` 设置，通过 `setRowSelectors(null)` 恢复默认。通常不需要修改。
+---
 
-标题读取会扫描多帧 zstd 日志，限制为 32 MiB 压缩数据、64 MiB 解压文本和 20,000 帧。超过限制或无法解析时使用对话 ID，不将不完整结果当作最新标题。
+## 6. 核心模块与职责分工
 
-## 客户端入口
+```text
+├── client-core.js            # 客户端通用确认弹窗、单条悬浮逻辑与状态总线
+├── client-manager.js         # 现代化看板主界面、分页筛选、规则计算与批量控制台
+├── client-slot.js            # 原生插槽模块，向 DSH 侧边栏和底部动作栏注入操作入口
+├── client.js                 # 由 scripts/build-client.mjs 内联打包生成的运行期无外部依赖脚本
+├── lib/
+│   ├── index.js              # 插件主入口：路由挂载、宿主上下文服务接入与全局生命周期编排
+│   ├── pruning-policy.js     # 纯逻辑保留规则计算器（纯函数，前后端同构复用）
+│   ├── agent-lifecycle.js    # AgentHandle 生命周期劫持与空闲释放安全代理
+│   ├── session-sources.js    # 多数据目录原子持久化配置、本机校验与跨来源请求代理
+│   ├── conversation-package.js # 导入导出 gzip 包解析、校验哈希与反序列化守卫
+│   ├── conversation-storage.js # 目录物理压缩、快照生成与按需毫秒级解压
+│   ├── conversation-maintenance.js # 持久化层无感拦截、自动定时压缩调度
+│   ├── desktop-restart.js    # 桌面平滑重启协调器
+│   ├── restart-watcher.js    # 后台重启监听守护进程
+│   └── request-close.ps1     # 优雅关闭窗口 PowerShell 脚本
+```
 
-- `client-core.js`：确认、管理窗口、兼容悬浮按钮和共享删除流程。
-- `client-manager.js`：管理窗口、分页选择、保留规则预览及可停止的逐条批量操作。
-- `lib/pruning-policy.js`：纯筛选、排序和保留规则，由构建内联进浏览器脚本。
-- `client.js`：由构建脚本生成的普通内联脚本，不手动修改。
-- `client-slot.js`：宿主原生模块，注入 `slots` 和 `sessions` 服务，将删除组件注册到 `sidebar.workspaces.session.row.action`，管理入口注册到 `sidebar.footer.action`，根据 `wide` 展示文字或图标。
-- `lib/agent-lifecycle.js`：保留并释放原有 AgentHandle，适配 Cordis 服务代理身份。
-- `lib/session-sources.js`：来源路径配置、本机宿主校验、合并名单和按来源转发变更。
-- `lib/conversation-package.js`：版本化 gzip 对话包、内容校验与输入边界。
-- `lib/conversation-storage.js`：会话快照、压缩文件发布及按需恢复。
-- `lib/conversation-maintenance.js`：持久化适配、自动压缩、导出与导入编排。
+---
 
-原生组件直接接收会话 ID。兼容层优先读取 `data-row-key="session:..."`，只有无明确 ID 的旧界面才使用唯一标题匹配；重复标题不会猜测目标。
+## 7. 主题变量适配规范
 
-## 主题适配
+插件设计遵循 **“完全融入宿主视觉”** 的原则，所有弹窗与组件均直接订阅 DSH 官方 CSS 变量：
 
-弹窗、管理入口、搜索框、按钮及提示使用 DSH 提供的 `--dsw-*` 主题变量：
-
-- 弹窗背景和文字：`--dsw-alias-bg-layer-2`、`--dsw-alias-label-primary`。
-- 输入框：`--dsw-alias-bg-layer-1`、`--dsw-alias-border-l4`。
-- 危险操作和悬停：`--dsw-alias-state-error-primary`、`--dsw-alias-interactive-bg-hover-danger`。
-- 焦点、圆角、阴影和遮罩：宿主对应的 `--dsw-focus-ring-*`、`--dsw-radius-*`、`--dsw-elevation-prominent`、`--dsw-alias-bg-mask-1`。
-
-DSH 在 `body` 上更新当前主题变量，插件作为其后代直接继承；`color-scheme` 也继承宿主设置。浅色、深色及通过这些变量提供的自定义主题，都能在窗口保持打开时更新，不依赖重载或额外监听器。缺少宿主变量的旧环境使用系统颜色作为兜底。
+- **背景与表面层**：`--dsw-alias-bg-layer-2`（主窗口面板）、`--dsw-alias-bg-layer-1`（输入框与次级卡片）
+- **文字与标签**：`--dsw-alias-label-primary`（主标题与正文）、`--dsw-alias-label-secondary`（次要说明）
+- **边框与阴影**：`--dsw-alias-border-l3`、`--dsw-elevation-prominent`
+- **交互与危险状态**：`--dsw-alias-state-error-primary`（删除/危险操作）、`--dsw-alias-interactive-bg-hover`
+- **无障碍高对比度**：严格遵循 WCAG 2.1 AA 级对比度要求（浅色与深色主题下对比度均稳定高于 4.5:1）。
