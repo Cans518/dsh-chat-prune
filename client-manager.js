@@ -12,6 +12,8 @@ function managerIcon(name) {
     trash: 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7',
     arrow: 'M5 12h14m-5-5 5 5-5 5',
     check: 'm5 12 4 4L19 6',
+    archive: 'M3 4h18v4H3V4Zm2 4v12h14V8M10 12h4',
+    import: 'M12 3v12m-4-4 4 4 4-4M4 17v3h16v-3',
   }
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   for (const [key, value] of Object.entries({
@@ -91,7 +93,7 @@ export function showConversationManager(services) {
   mark.append(managerIcon('conversations'))
   const title = node('div')
   dialog.querySelector('h2').title = t('manage.title')
-  title.append(dialog.querySelector('h2'), node('p', text('让重要的内容留下来。', 'Make room for the conversations that matter.')))
+  title.append(dialog.querySelector('h2'))
   heading.append(mark, title)
   actions.append(heading, refresh, close)
   const stats = node('div', undefined, 'dshdc-summary')
@@ -101,6 +103,7 @@ export function showConversationManager(services) {
   sourcePanel.id = 'dshdc-sources'
   sourcePanel.hidden = true
   const sourceToggle = button(text('管理来源路径', 'Manage source paths'), () => {
+    switchView('conversations')
     sourcePanel.hidden = !sourcePanel.hidden
     sourceToggle.setAttribute('aria-expanded', String(!sourcePanel.hidden))
   })
@@ -110,6 +113,8 @@ export function showConversationManager(services) {
   sourceToggle.setAttribute('aria-controls', sourcePanel.id)
   sourceToggle.prepend(managerIcon('folder'))
   actions.insertBefore(sourceToggle, refresh)
+  refresh.setAttribute('aria-label', refresh.textContent)
+  sourceToggle.setAttribute('aria-label', sourceToggle.textContent)
   sourceTools.append(node('span', text('集中查看所有目录，按来源分别执行操作。', 'Browse all directories together; actions stay within their source.')))
   const sourceList = node('div', undefined, 'dshdc-source-list')
   const sourceForm = node('form', undefined, 'dshdc-filters')
@@ -274,13 +279,24 @@ export function showConversationManager(services) {
       `${selected.size} candidates, about ${formatBytes(candidates.reduce((sum, row) => sum + row.bytes, 0))}. Protected: ${plan.skipped.pinned} pinned, ${plan.skipped.loaded} running or protected, ${plan.skipped.missing} missing, ${plan.skipped.recent} retained, ${plan.skipped.age} too recent. Review before proceeding.`)
   })
   rules.append(ruleFields, ruleHint, prune)
-  const compressionPanel = node('details', undefined, 'dshdc-rules')
+  const compressionPanel = node('div', undefined, 'dshdc-storage-cards')
   compressionPanel.id = 'dshdc-compression'
-  compressionPanel.append(node('summary', text('压缩与迁移', 'Compression and transfer')))
-  const compressionFields = node('div', undefined, 'dshdc-filters')
+  const storageCard = (icon, heading, description) => {
+    const card = node('section', undefined, 'dshdc-storage-card')
+    const head = node('div', undefined, 'dshdc-storage-card-head')
+    const mark = node('span', undefined, 'dshdc-storage-card-mark')
+    mark.append(managerIcon(icon))
+    const copy = node('div')
+    copy.append(node('h4', heading), node('p', description, 'dshdc-hint'))
+    head.append(mark, copy)
+    card.append(head)
+    return card
+  }
+  const compressionFields = node('div', undefined, 'dshdc-storage-fields')
   const compressionDays = number(text('多少天未更新后自动压缩（0 为关闭）', 'Auto-compress after days without updates (0 disables)'), 0, compressionFields)
   compressionDays.max = '36500'
-  const compressionNotice = node('p', undefined, 'dshdc-hint')
+  const compressionNotice = node('p', undefined, 'dshdc-hint dshdc-storage-notice')
+  compressionNotice.setAttribute('role', 'status')
   const runStorageTask = async (work) => {
     if (busy || loading || !beginBatch()) return
     busy = true
@@ -316,9 +332,22 @@ export function showConversationManager(services) {
       `${result.compressed} compressed, ${result.skipped} skipped, ${result.errors.length} failed.`) +
       result.errors.map((entry) => `\n${entry.sessionId}: ${entry.error}`).join('')
   }))
-  const importFile = field(text('对话压缩包', 'Conversation package'), node('input'), compressionFields)
+  const importFields = node('div', undefined, 'dshdc-storage-fields')
+  const importFile = field(text('对话压缩包', 'Conversation package'), node('input'), importFields)
   importFile.type = 'file'
   importFile.accept = '.gz,application/gzip'
+  // The native control stays on top (transparent) so clicking and the keyboard work unchanged.
+  const picker = importFile.parentElement
+  picker.classList.add('dshdc-file-picker')
+  const pickerFace = node('span', undefined, 'dshdc-file-face')
+  const pickerName = node('span', text('选择 .dsh-chat.gz 文件', 'Choose a .dsh-chat.gz file'), 'dshdc-file-name')
+  pickerFace.append(managerIcon('folder'), pickerName)
+  picker.append(pickerFace)
+  importFile.addEventListener('change', () => {
+    const file = importFile.files?.[0]
+    pickerName.textContent = file ? `${file.name} · ${formatBytes(file.size)}` : text('选择 .dsh-chat.gz 文件', 'Choose a .dsh-chat.gz file')
+    picker.dataset.selected = String(Boolean(file))
+  })
   const importPackage = button(text('导入对话压缩包', 'Import conversation package'), () => {
     const file = importFile.files?.[0]
     if (!file) { compressionNotice.textContent = text('请先选择压缩包。', 'Choose a package first.'); return }
@@ -328,13 +357,26 @@ export function showConversationManager(services) {
         method: 'POST', headers: { 'content-type': 'application/gzip' }, body: await file.arrayBuffer(),
       })
       importFile.value = ''
+      importFile.dispatchEvent(new Event('change'))
       return text(`已导入 ${result.imported.length} 条对话。`, `${result.imported.length} conversations imported.`)
     })
   })
-  compressionPanel.append(compressionFields, node('p', text(
-    '自动压缩仅作用于当前来源，跳过置顶和受保护的会话。打开对话时自动解压。选择列表中的对话可手动压缩或批量导出；每次导出选择同一来源。导入到当前环境的新工作区，保留标题、内容和附件；已有 ID 会拒绝导入。',
-    'Automatic compression applies to this source and skips pinned and protected records. Opening a conversation restores it. Select records to compress or export; export one source at a time. Import restores titles, content and attachments into a local workspace; existing IDs are rejected.'), 'dshdc-hint'),
-  saveCompression, runCompression, importPackage, compressionNotice)
+  saveCompression.classList.add('dshdc-primary')
+  importPackage.classList.add('dshdc-primary')
+  runCompression.classList.add('dshdc-text-button')
+  const compressionCard = storageCard('archive', text('自动压缩', 'Automatic compression'), text(
+    '长期未更新的对话会被压缩以节省空间，打开时自动解压。仅作用于当前来源，跳过置顶和受保护的对话。',
+    'Conversations left unchanged are compressed to save space and restored when opened. Applies to this source and skips pinned and protected records.'))
+  const compressionActions = node('div', undefined, 'dshdc-storage-actions')
+  compressionActions.append(runCompression, saveCompression)
+  compressionCard.append(compressionFields, compressionActions)
+  const importCard = storageCard('import', text('导入对话', 'Import conversations'), text(
+    '导入从其他环境导出的压缩包，保留标题、内容和附件，放入当前环境的新工作区；已有 ID 会拒绝导入。导出请在对话列表中选择记录后使用批量操作。',
+    'Import a package exported elsewhere. Titles, content and attachments are restored into a new local workspace; existing IDs are rejected. To export, select records in the list and use a batch action.'))
+  const importActions = node('div', undefined, 'dshdc-storage-actions')
+  importActions.append(importPackage)
+  importCard.append(importFields, importActions)
+  compressionPanel.append(compressionCard, importCard, compressionNotice)
   const toolbar = node('div', undefined, 'dshdc-list-toolbar')
   const selectPage = node('input')
   selectPage.type = 'checkbox'
@@ -403,28 +445,78 @@ export function showConversationManager(services) {
   records.setAttribute('aria-label', text('对话列表', 'Conversations'))
   const pagination = node('nav', undefined, 'dshdc-pagination')
   pagination.setAttribute('aria-label', text('对话分页', 'Conversation pages'))
-  const previous = button(text('上一页', 'Previous'), () => { page--; render() })
-  const next = button(text('下一页', 'Next'), () => { page++; render() })
+  const turnPage = (offset) => { page += offset; render(); listScroller.scrollTop = 0 }
+  const previous = button(text('上一页', 'Previous'), () => turnPage(-1))
+  const next = button(text('下一页', 'Next'), () => turnPage(1))
   const pageCaption = node('span')
   const pageRange = node('span', undefined, 'dshdc-page-range')
   const pageControls = node('div')
   pageControls.append(previous, pageCaption, next)
-  pagination.append(pageRange, pageControls)
+  const density = button(text('紧凑列表', 'Compact list'), () => {
+    const compact = dialog.dataset.density !== 'compact'
+    dialog.dataset.density = compact ? 'compact' : 'comfortable'
+    density.setAttribute('aria-pressed', String(compact))
+  }, 'dshdc-density')
+  density.setAttribute('aria-pressed', 'false')
+  pagination.append(pageRange, density, pageControls)
   const results = node('div')
   results.id = 'dshdc-results'
   results.tabIndex = -1
   const body = node('div', undefined, 'dshdc-manager-body')
   const controls = node('div', undefined, 'dshdc-manager-controls')
   advanced.append(rules)
-  controls.append(stats, sourceTools, sourcePanel, filters, filterTools, advanced, compressionPanel)
+  sourcePanel.prepend(sourceTools)
+  controls.append(stats, sourcePanel, filters, filterTools, advanced)
   const listSection = node('section', undefined, 'dshdc-list-section')
   const listScroller = node('div', undefined, 'dshdc-records-scroll')
   listScroller.tabIndex = 0
   listScroller.setAttribute('aria-label', text('滚动浏览对话', 'Browse conversations'))
   listScroller.append(records, results)
   listSection.append(toolbar, listScroller, pagination)
-  body.append(controls, message, listSection)
-  dialog.append(actions, body, operations)
+  const navigation = node('div', undefined, 'dshdc-view-tabs')
+  navigation.setAttribute('role', 'tablist')
+  navigation.setAttribute('aria-label', text('管理分区', 'Management sections'))
+  const storageView = node('section', undefined, 'dshdc-storage-view')
+  storageView.id = 'dshdc-storage-view'
+  storageView.hidden = true
+  storageView.setAttribute('role', 'tabpanel')
+  storageView.append(compressionPanel)
+  body.id = 'dshdc-conversations-view'
+  body.setAttribute('role', 'tabpanel')
+  const tabs = [['conversations', text('对话列表', 'Conversations'), body],
+    ['storage', text('存储与迁移', 'Storage & transfer'), storageView]].map(([value, label, panel]) => {
+    const tab = button(label, () => switchView(value))
+    tab.id = `dshdc-tab-${value}`
+    tab.setAttribute('role', 'tab')
+    tab.setAttribute('aria-controls', panel.id)
+    panel.setAttribute('aria-labelledby', tab.id)
+    navigation.append(tab)
+    return { value, tab, panel }
+  })
+  function switchView(value) {
+    for (const entry of tabs) {
+      const active = entry.value === value
+      entry.tab.setAttribute('aria-selected', String(active))
+      entry.tab.tabIndex = active ? 0 : -1
+      entry.panel.hidden = !active
+    }
+    operations.hidden = value !== 'conversations'
+  }
+  navigation.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const current = tabs.findIndex((entry) => entry.tab === document.activeElement)
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+    if (tabs[index].tab.disabled) return
+    switchView(tabs[index].value)
+    tabs[index].tab.focus()
+  })
+  switchView('conversations')
+  body.append(controls, listSection)
+  // Section tabs sit in the header row so the conversation list keeps the vertical space.
+  actions.insertBefore(navigation, sourceToggle)
+  dialog.append(actions, message, body, storageView, operations)
 
   function filtered() {
     return filterSessions(rows.map((row) => ({ ...row, title: row.title || t('manage.untitled') })), {
@@ -576,7 +668,7 @@ export function showConversationManager(services) {
           if (!closed) { setBusyControls(); render(); search.focus() }
         }
       }, 'dshdc-danger dshdc-record-remove')
-      remove.setAttribute('aria-label', t('btn.aria'))
+      remove.setAttribute('aria-label', `${t('btn.aria')}: ${row.title || row.id}`)
       remove.title = t('btn.aria')
       remove.replaceChildren(managerIcon('trash'))
       remove.disabled = busy || row.running || row.readOnly
@@ -835,7 +927,13 @@ export function showConversationManager(services) {
       : text('未开启备份。删除本地记录后无法通过插件撤销。', 'Backup is off. Deleted local records cannot be undone through this plugin.'),
     'dshdc-preview-warning'))
     const list = node('div', undefined, 'dshdc-preview-list')
-    for (const row of targets) list.append(node('p', `${row.title || t('manage.untitled')}\n${row.workspace} · ${row.id}${row.sourceHome ? `\n${row.sourceHome}` : ''}`))
+    for (const row of targets) {
+      const item = node('p')
+      item.append(node('strong', row.title || t('manage.untitled')), '\n',
+        node('small', `${row.workspace} · ${row.id}${row.sourceHome ? `\n${row.sourceHome}` : ''}`), '\n',
+        node('span', formatBytes(row.bytes), 'dshdc-preview-size'))
+      list.append(item)
+    }
     previewBody.append(list)
     previewDialog.append(previewBody)
     const controls = node('div', undefined, 'dshdc-actions')
@@ -883,6 +981,7 @@ export function showConversationManager(services) {
     if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey &&
         !event.target.closest('input, select, textarea, [contenteditable="true"]')) {
       event.preventDefault()
+      switchView('conversations')
       search.focus()
     }
   })

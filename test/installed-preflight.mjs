@@ -77,6 +77,7 @@ check('cordis resolveConfig 用 patch 里的 config 能跑通', () => {
 check('安装副本的运行时代码与当前工作区一致', () => {
   for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'lib/agent-lifecycle.js', 'lib/session-sources.js',
     'lib/conversation-package.js', 'lib/conversation-storage.js', 'lib/conversation-maintenance.js',
+    'lib/desktop-restart.js', 'lib/restart-watcher.js', 'lib/request-close.ps1',
     'client-core.js', 'client-manager.js', 'client.js', 'client-slot.js']) {
     const digest = (value) => createHash('sha256').update(value).digest('hex')
     assert.equal(digest(readFileSync(join(installedDir, file))),

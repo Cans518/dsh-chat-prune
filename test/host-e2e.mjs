@@ -84,6 +84,7 @@ async function parentMain() {
   await mkdir(join(installed, 'lib'), { recursive: true })
   for (const file of ['lib/index.js', 'lib/pruning-policy.js', 'lib/agent-lifecycle.js', 'lib/session-sources.js',
     'lib/conversation-package.js', 'lib/conversation-storage.js', 'lib/conversation-maintenance.js',
+    'lib/desktop-restart.js', 'lib/restart-watcher.js', 'lib/request-close.ps1',
     'package.json', 'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
     await cp(join(sourceRoot, file), join(installed, file))
   }
@@ -151,6 +152,28 @@ async function parentMain() {
     await managerEntry.waitFor({ timeout: 30000 })
     assert.equal(await page.locator('[data-slot="sidebar.footer.action"] .dshdc-sidebar-manage').count(), 1)
     assert.equal(await page.locator('#dshdc-manage').isVisible(), false)
+    // Every footer registrant shares one host flex row; the entry must own a full-width row there.
+    const footerRows = await page.locator('[data-slot="sidebar.footer.action"]').evaluate((anchor) => {
+      const entry = anchor.querySelector('.dshdc-sidebar-row').getBoundingClientRect()
+      const row = anchor.parentElement.getBoundingClientRect()
+      const others = [...anchor.children].filter((child) => !child.classList.contains('dshdc-sidebar-row'))
+        .map((child) => child.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0)
+      return { entry: { x: entry.x, y: entry.y, width: entry.width, height: entry.height },
+        row: { x: row.x, width: row.width }, others: others.map((box) => ({ y: box.y, bottom: box.bottom, width: box.width })) }
+    })
+    console.log('Sidebar footer geometry:', JSON.stringify(footerRows))
+    // This audit host is a Node-mode child of the test runner, not of a DSH window: no restart offered.
+    const restartStatus = await page.evaluate(async () => (await fetch('/dsh-chat-prune/restart')).json())
+    assert.deepEqual([restartStatus.ok, restartStatus.supported, restartStatus.restarting], [true, false, false])
+    // Sent outside the page: the expected 409 would otherwise count as a console error.
+    const refused = await page.request.post(new URL('/dsh-chat-prune/restart', page.url()).href)
+    assert.equal(refused.status(), 409, 'An unsupported host refuses to shut itself down')
+    assert.equal(await page.locator('.dshdc-sidebar-restart').isVisible(), false)
+    assert.ok(footerRows.entry.width >= footerRows.row.width - 1, 'Manager entry spans the sidebar footer')
+    for (const other of footerRows.others) {
+      assert.ok(footerRows.entry.y >= other.bottom - 0.5 || footerRows.entry.y + footerRows.entry.height <= other.y + 0.5,
+        'Manager entry does not share a line with other footer plugins')
+    }
     await page.screenshot({ path: join(home, 'boot.png') })
     const status = await page.evaluate(() => window.dshChatPrune.status())
     assert.equal(status.nativeRowAction, true)

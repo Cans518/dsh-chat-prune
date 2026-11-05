@@ -96,6 +96,8 @@ function managerIcon(name) {
     trash: 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7',
     arrow: 'M5 12h14m-5-5 5 5-5 5',
     check: 'm5 12 4 4L19 6',
+    archive: 'M3 4h18v4H3V4Zm2 4v12h14V8M10 12h4',
+    import: 'M12 3v12m-4-4 4 4 4-4M4 17v3h16v-3',
   }
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   for (const [key, value] of Object.entries({
@@ -175,7 +177,7 @@ function showConversationManager(services) {
   mark.append(managerIcon('conversations'))
   const title = node('div')
   dialog.querySelector('h2').title = t('manage.title')
-  title.append(dialog.querySelector('h2'), node('p', text('让重要的内容留下来。', 'Make room for the conversations that matter.')))
+  title.append(dialog.querySelector('h2'))
   heading.append(mark, title)
   actions.append(heading, refresh, close)
   const stats = node('div', undefined, 'dshdc-summary')
@@ -185,6 +187,7 @@ function showConversationManager(services) {
   sourcePanel.id = 'dshdc-sources'
   sourcePanel.hidden = true
   const sourceToggle = button(text('管理来源路径', 'Manage source paths'), () => {
+    switchView('conversations')
     sourcePanel.hidden = !sourcePanel.hidden
     sourceToggle.setAttribute('aria-expanded', String(!sourcePanel.hidden))
   })
@@ -194,6 +197,8 @@ function showConversationManager(services) {
   sourceToggle.setAttribute('aria-controls', sourcePanel.id)
   sourceToggle.prepend(managerIcon('folder'))
   actions.insertBefore(sourceToggle, refresh)
+  refresh.setAttribute('aria-label', refresh.textContent)
+  sourceToggle.setAttribute('aria-label', sourceToggle.textContent)
   sourceTools.append(node('span', text('集中查看所有目录，按来源分别执行操作。', 'Browse all directories together; actions stay within their source.')))
   const sourceList = node('div', undefined, 'dshdc-source-list')
   const sourceForm = node('form', undefined, 'dshdc-filters')
@@ -358,13 +363,24 @@ function showConversationManager(services) {
       `${selected.size} candidates, about ${formatBytes(candidates.reduce((sum, row) => sum + row.bytes, 0))}. Protected: ${plan.skipped.pinned} pinned, ${plan.skipped.loaded} running or protected, ${plan.skipped.missing} missing, ${plan.skipped.recent} retained, ${plan.skipped.age} too recent. Review before proceeding.`)
   })
   rules.append(ruleFields, ruleHint, prune)
-  const compressionPanel = node('details', undefined, 'dshdc-rules')
+  const compressionPanel = node('div', undefined, 'dshdc-storage-cards')
   compressionPanel.id = 'dshdc-compression'
-  compressionPanel.append(node('summary', text('压缩与迁移', 'Compression and transfer')))
-  const compressionFields = node('div', undefined, 'dshdc-filters')
+  const storageCard = (icon, heading, description) => {
+    const card = node('section', undefined, 'dshdc-storage-card')
+    const head = node('div', undefined, 'dshdc-storage-card-head')
+    const mark = node('span', undefined, 'dshdc-storage-card-mark')
+    mark.append(managerIcon(icon))
+    const copy = node('div')
+    copy.append(node('h4', heading), node('p', description, 'dshdc-hint'))
+    head.append(mark, copy)
+    card.append(head)
+    return card
+  }
+  const compressionFields = node('div', undefined, 'dshdc-storage-fields')
   const compressionDays = number(text('多少天未更新后自动压缩（0 为关闭）', 'Auto-compress after days without updates (0 disables)'), 0, compressionFields)
   compressionDays.max = '36500'
-  const compressionNotice = node('p', undefined, 'dshdc-hint')
+  const compressionNotice = node('p', undefined, 'dshdc-hint dshdc-storage-notice')
+  compressionNotice.setAttribute('role', 'status')
   const runStorageTask = async (work) => {
     if (busy || loading || !beginBatch()) return
     busy = true
@@ -400,9 +416,22 @@ function showConversationManager(services) {
       `${result.compressed} compressed, ${result.skipped} skipped, ${result.errors.length} failed.`) +
       result.errors.map((entry) => `\n${entry.sessionId}: ${entry.error}`).join('')
   }))
-  const importFile = field(text('对话压缩包', 'Conversation package'), node('input'), compressionFields)
+  const importFields = node('div', undefined, 'dshdc-storage-fields')
+  const importFile = field(text('对话压缩包', 'Conversation package'), node('input'), importFields)
   importFile.type = 'file'
   importFile.accept = '.gz,application/gzip'
+  // The native control stays on top (transparent) so clicking and the keyboard work unchanged.
+  const picker = importFile.parentElement
+  picker.classList.add('dshdc-file-picker')
+  const pickerFace = node('span', undefined, 'dshdc-file-face')
+  const pickerName = node('span', text('选择 .dsh-chat.gz 文件', 'Choose a .dsh-chat.gz file'), 'dshdc-file-name')
+  pickerFace.append(managerIcon('folder'), pickerName)
+  picker.append(pickerFace)
+  importFile.addEventListener('change', () => {
+    const file = importFile.files?.[0]
+    pickerName.textContent = file ? `${file.name} · ${formatBytes(file.size)}` : text('选择 .dsh-chat.gz 文件', 'Choose a .dsh-chat.gz file')
+    picker.dataset.selected = String(Boolean(file))
+  })
   const importPackage = button(text('导入对话压缩包', 'Import conversation package'), () => {
     const file = importFile.files?.[0]
     if (!file) { compressionNotice.textContent = text('请先选择压缩包。', 'Choose a package first.'); return }
@@ -412,13 +441,26 @@ function showConversationManager(services) {
         method: 'POST', headers: { 'content-type': 'application/gzip' }, body: await file.arrayBuffer(),
       })
       importFile.value = ''
+      importFile.dispatchEvent(new Event('change'))
       return text(`已导入 ${result.imported.length} 条对话。`, `${result.imported.length} conversations imported.`)
     })
   })
-  compressionPanel.append(compressionFields, node('p', text(
-    '自动压缩仅作用于当前来源，跳过置顶和受保护的会话。打开对话时自动解压。选择列表中的对话可手动压缩或批量导出；每次导出选择同一来源。导入到当前环境的新工作区，保留标题、内容和附件；已有 ID 会拒绝导入。',
-    'Automatic compression applies to this source and skips pinned and protected records. Opening a conversation restores it. Select records to compress or export; export one source at a time. Import restores titles, content and attachments into a local workspace; existing IDs are rejected.'), 'dshdc-hint'),
-  saveCompression, runCompression, importPackage, compressionNotice)
+  saveCompression.classList.add('dshdc-primary')
+  importPackage.classList.add('dshdc-primary')
+  runCompression.classList.add('dshdc-text-button')
+  const compressionCard = storageCard('archive', text('自动压缩', 'Automatic compression'), text(
+    '长期未更新的对话会被压缩以节省空间，打开时自动解压。仅作用于当前来源，跳过置顶和受保护的对话。',
+    'Conversations left unchanged are compressed to save space and restored when opened. Applies to this source and skips pinned and protected records.'))
+  const compressionActions = node('div', undefined, 'dshdc-storage-actions')
+  compressionActions.append(runCompression, saveCompression)
+  compressionCard.append(compressionFields, compressionActions)
+  const importCard = storageCard('import', text('导入对话', 'Import conversations'), text(
+    '导入从其他环境导出的压缩包，保留标题、内容和附件，放入当前环境的新工作区；已有 ID 会拒绝导入。导出请在对话列表中选择记录后使用批量操作。',
+    'Import a package exported elsewhere. Titles, content and attachments are restored into a new local workspace; existing IDs are rejected. To export, select records in the list and use a batch action.'))
+  const importActions = node('div', undefined, 'dshdc-storage-actions')
+  importActions.append(importPackage)
+  importCard.append(importFields, importActions)
+  compressionPanel.append(compressionCard, importCard, compressionNotice)
   const toolbar = node('div', undefined, 'dshdc-list-toolbar')
   const selectPage = node('input')
   selectPage.type = 'checkbox'
@@ -487,28 +529,78 @@ function showConversationManager(services) {
   records.setAttribute('aria-label', text('对话列表', 'Conversations'))
   const pagination = node('nav', undefined, 'dshdc-pagination')
   pagination.setAttribute('aria-label', text('对话分页', 'Conversation pages'))
-  const previous = button(text('上一页', 'Previous'), () => { page--; render() })
-  const next = button(text('下一页', 'Next'), () => { page++; render() })
+  const turnPage = (offset) => { page += offset; render(); listScroller.scrollTop = 0 }
+  const previous = button(text('上一页', 'Previous'), () => turnPage(-1))
+  const next = button(text('下一页', 'Next'), () => turnPage(1))
   const pageCaption = node('span')
   const pageRange = node('span', undefined, 'dshdc-page-range')
   const pageControls = node('div')
   pageControls.append(previous, pageCaption, next)
-  pagination.append(pageRange, pageControls)
+  const density = button(text('紧凑列表', 'Compact list'), () => {
+    const compact = dialog.dataset.density !== 'compact'
+    dialog.dataset.density = compact ? 'compact' : 'comfortable'
+    density.setAttribute('aria-pressed', String(compact))
+  }, 'dshdc-density')
+  density.setAttribute('aria-pressed', 'false')
+  pagination.append(pageRange, density, pageControls)
   const results = node('div')
   results.id = 'dshdc-results'
   results.tabIndex = -1
   const body = node('div', undefined, 'dshdc-manager-body')
   const controls = node('div', undefined, 'dshdc-manager-controls')
   advanced.append(rules)
-  controls.append(stats, sourceTools, sourcePanel, filters, filterTools, advanced, compressionPanel)
+  sourcePanel.prepend(sourceTools)
+  controls.append(stats, sourcePanel, filters, filterTools, advanced)
   const listSection = node('section', undefined, 'dshdc-list-section')
   const listScroller = node('div', undefined, 'dshdc-records-scroll')
   listScroller.tabIndex = 0
   listScroller.setAttribute('aria-label', text('滚动浏览对话', 'Browse conversations'))
   listScroller.append(records, results)
   listSection.append(toolbar, listScroller, pagination)
-  body.append(controls, message, listSection)
-  dialog.append(actions, body, operations)
+  const navigation = node('div', undefined, 'dshdc-view-tabs')
+  navigation.setAttribute('role', 'tablist')
+  navigation.setAttribute('aria-label', text('管理分区', 'Management sections'))
+  const storageView = node('section', undefined, 'dshdc-storage-view')
+  storageView.id = 'dshdc-storage-view'
+  storageView.hidden = true
+  storageView.setAttribute('role', 'tabpanel')
+  storageView.append(compressionPanel)
+  body.id = 'dshdc-conversations-view'
+  body.setAttribute('role', 'tabpanel')
+  const tabs = [['conversations', text('对话列表', 'Conversations'), body],
+    ['storage', text('存储与迁移', 'Storage & transfer'), storageView]].map(([value, label, panel]) => {
+    const tab = button(label, () => switchView(value))
+    tab.id = `dshdc-tab-${value}`
+    tab.setAttribute('role', 'tab')
+    tab.setAttribute('aria-controls', panel.id)
+    panel.setAttribute('aria-labelledby', tab.id)
+    navigation.append(tab)
+    return { value, tab, panel }
+  })
+  function switchView(value) {
+    for (const entry of tabs) {
+      const active = entry.value === value
+      entry.tab.setAttribute('aria-selected', String(active))
+      entry.tab.tabIndex = active ? 0 : -1
+      entry.panel.hidden = !active
+    }
+    operations.hidden = value !== 'conversations'
+  }
+  navigation.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const current = tabs.findIndex((entry) => entry.tab === document.activeElement)
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+    if (tabs[index].tab.disabled) return
+    switchView(tabs[index].value)
+    tabs[index].tab.focus()
+  })
+  switchView('conversations')
+  body.append(controls, listSection)
+  // Section tabs sit in the header row so the conversation list keeps the vertical space.
+  actions.insertBefore(navigation, sourceToggle)
+  dialog.append(actions, message, body, storageView, operations)
 
   function filtered() {
     return filterSessions(rows.map((row) => ({ ...row, title: row.title || t('manage.untitled') })), {
@@ -660,7 +752,7 @@ function showConversationManager(services) {
           if (!closed) { setBusyControls(); render(); search.focus() }
         }
       }, 'dshdc-danger dshdc-record-remove')
-      remove.setAttribute('aria-label', t('btn.aria'))
+      remove.setAttribute('aria-label', `${t('btn.aria')}: ${row.title || row.id}`)
       remove.title = t('btn.aria')
       remove.replaceChildren(managerIcon('trash'))
       remove.disabled = busy || row.running || row.readOnly
@@ -919,7 +1011,13 @@ function showConversationManager(services) {
       : text('未开启备份。删除本地记录后无法通过插件撤销。', 'Backup is off. Deleted local records cannot be undone through this plugin.'),
     'dshdc-preview-warning'))
     const list = node('div', undefined, 'dshdc-preview-list')
-    for (const row of targets) list.append(node('p', `${row.title || t('manage.untitled')}\n${row.workspace} · ${row.id}${row.sourceHome ? `\n${row.sourceHome}` : ''}`))
+    for (const row of targets) {
+      const item = node('p')
+      item.append(node('strong', row.title || t('manage.untitled')), '\n',
+        node('small', `${row.workspace} · ${row.id}${row.sourceHome ? `\n${row.sourceHome}` : ''}`), '\n',
+        node('span', formatBytes(row.bytes), 'dshdc-preview-size'))
+      list.append(item)
+    }
     previewBody.append(list)
     previewDialog.append(previewBody)
     const controls = node('div', undefined, 'dshdc-actions')
@@ -967,6 +1065,7 @@ function showConversationManager(services) {
     if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey &&
         !event.target.closest('input, select, textarea, [contenteditable="true"]')) {
       event.preventDefault()
+      switchView('conversations')
       search.focus()
     }
   })
@@ -1055,6 +1154,16 @@ const zh = {
   'manage.missing': '本地记录已缺失，可清理残留索引',
   'manage.count': '{count} 个对话',
   'confirm.missing': '将从会话列表清理 {id} 的残留索引。本地记录已不存在。',
+  'restart.label': '重启 DSH',
+  'restart.title': '重启 DSH',
+  'restart.body': 'DSH 会先保存对话并正常关闭，然后自动重新打开，通常需要几秒钟。',
+  'restart.running': '有 {count} 个对话正在运行，重启会中断它们。',
+  'restart.confirm': '立即重启',
+  'restart.progress': '正在重启 DSH…',
+  'restart.progressHint': '正在保存对话并关闭，DSH 会自动重新打开。',
+  'restart.slow': '重启时间比预期长。如果 DSH 没有重新打开，请从任务栏托盘退出后手动打开。',
+  'restart.unsupported': '当前环境无法自动重启 DSH。请正常退出后手动打开。',
+  'restart.failed': '无法重启 DSH：',
 }
 
 const en = {
@@ -1089,6 +1198,16 @@ const en = {
   'manage.missing': 'Local record missing; remove stale list entries',
   'manage.count': '{count} conversations',
   'confirm.missing': 'Remove stale list entries for {id}. The local record is already missing.',
+  'restart.label': 'Restart DSH',
+  'restart.title': 'Restart DSH',
+  'restart.body': 'DSH saves your conversations, shuts down normally and opens again automatically. This usually takes a few seconds.',
+  'restart.running': '{count} conversation(s) are running and will be interrupted.',
+  'restart.confirm': 'Restart now',
+  'restart.progress': 'Restarting DSH…',
+  'restart.progressHint': 'Saving conversations and shutting down. DSH opens again automatically.',
+  'restart.slow': 'The restart is taking longer than expected. If DSH does not reopen, quit it from the tray and open it again.',
+  'restart.unsupported': 'DSH cannot be restarted automatically here. Quit it normally and open it again.',
+  'restart.failed': 'Could not restart DSH: ',
 }
 
 /** 会话列表行的候选选择器，按优先级。实测 treeitem 是真实形态。 */
@@ -1338,7 +1457,7 @@ function ensureLayer() {
   const style = document.createElement('style')
   style.id = 'dshdc-style'
   style.textContent = `
-#${LAYER_ID}, .dshdc-native-del, .dshdc-sidebar-manage {
+#${LAYER_ID}, .dshdc-native-del, .dshdc-sidebar-row {
   --dshdc-surface: var(--dsw-alias-bg-layer-2, Canvas);
   --dshdc-text: var(--dsw-alias-label-primary, CanvasText);
   --dshdc-muted: var(--dsw-alias-label-secondary, GrayText);
@@ -1385,15 +1504,44 @@ function ensureLayer() {
   background:var(--dshdc-surface); color:var(--dshdc-text); font:inherit; }
 #dshdc-manage:hover { background:var(--dshdc-hover); }
 #dshdc-manage[hidden] { display:none; }
-.dshdc-sidebar-manage { display:flex; align-items:center; justify-content:center; gap:10px;
-  box-sizing:border-box; min-height:44px; width:100%; padding:10px 12px;
-  border:0; border-radius:var(--dsw-radius-md,8px); background:transparent;
-  color:var(--dshdc-text); cursor:pointer; font:inherit; white-space:nowrap; }
-.dshdc-sidebar-manage:hover { background:var(--dshdc-hover); }
-.dshdc-sidebar-manage:focus-visible { outline:2px solid var(--dshdc-focus); outline-offset:-2px; }
-.dshdc-sidebar-manage:active { background:var(--dshdc-active); }
-.dshdc-dialog { color-scheme:inherit; box-sizing:border-box; width:min(640px, calc(100vw - 32px));
-  max-height:80vh; padding:24px; border:0; border-radius:var(--dsw-radius-panel, 12px);
+/* DSH renders every sidebar.footer.action registrant into one non-wrapping flex row through a
+   display:contents slot anchor, so siblings would share (and shrink) a single line. Stack that row. */
+:has(> [data-slot="sidebar.footer.action"] > .dshdc-sidebar-row),
+:has(> .dshdc-sidebar-row):not([data-slot]) { flex-direction:column; align-items:stretch; gap:2px; }
+:has(> [data-slot="sidebar.footer.action"] > .dshdc-sidebar-row[data-wide="false"]),
+:has(> .dshdc-sidebar-row[data-wide="false"]):not([data-slot]) { align-items:center; }
+.dshdc-sidebar-row { display:flex; flex:none; align-items:center; gap:2px; box-sizing:border-box;
+  width:calc(100% + 4px); min-width:0; height:42px; margin:2px -2px 0; }
+.dshdc-sidebar-row[data-wide="false"] { width:36px; height:36px; margin:0; }
+.dshdc-sidebar-row :is(.dshdc-sidebar-manage, .dshdc-sidebar-restart) { display:flex; align-items:center;
+  box-sizing:border-box; height:100%; border:0; background:transparent; cursor:pointer; font:inherit;
+  color:var(--dsw-alias-label-primary, var(--dshdc-text)); }
+.dshdc-sidebar-manage { flex:1; gap:8px; min-width:0; padding:0 10px 0 8px; border-radius:12px;
+  font-size:14px; line-height:20px; white-space:nowrap; overflow:hidden; }
+.dshdc-sidebar-manage > svg { flex:none; width:16px; height:16px; }
+.dshdc-sidebar-manage > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.dshdc-sidebar-row[data-wide="false"] .dshdc-sidebar-manage { justify-content:center; gap:0; padding:0; border-radius:50%; }
+.dshdc-sidebar-row[data-wide="false"] .dshdc-sidebar-manage > svg { width:18px; height:18px; }
+/* Hidden until the host confirms it can restart DSH, and in the collapsed rail. */
+.dshdc-sidebar-restart { display:none !important; flex:none; justify-content:center; width:36px; padding:0;
+  border-radius:10px; color:var(--dsw-alias-label-tertiary, var(--dshdc-muted)) !important; }
+:root[data-dshdc-restart] .dshdc-sidebar-row[data-wide="true"] .dshdc-sidebar-restart { display:flex !important; }
+.dshdc-sidebar-restart > svg { width:16px; height:16px; }
+.dshdc-sidebar-row:hover .dshdc-sidebar-restart { color:var(--dsw-alias-label-secondary, var(--dshdc-muted)) !important; }
+.dshdc-sidebar-restart:hover { color:var(--dsw-alias-label-primary, var(--dshdc-text)) !important; }
+.dshdc-sidebar-restart:disabled { opacity:1; cursor:progress; }
+:root[data-dshdc-restart="restarting"] .dshdc-sidebar-restart { color:var(--dshdc-focus) !important; cursor:progress; }
+:root[data-dshdc-restart="restarting"] .dshdc-sidebar-restart > svg { animation:dshdc-refresh 1s linear infinite; }
+#dshdc-restart-progress { width:min(400px, calc(100vw - 32px)); }
+#dshdc-restart-progress progress { width:100%; height:4px; accent-color:var(--dshdc-focus); }
+.dshdc-sidebar-row :is(.dshdc-sidebar-manage, .dshdc-sidebar-restart):hover { background:var(--dshdc-hover); }
+.dshdc-sidebar-row :is(.dshdc-sidebar-manage, .dshdc-sidebar-restart):focus-visible { outline:2px solid var(--dshdc-focus); outline-offset:-2px; }
+.dshdc-sidebar-row :is(.dshdc-sidebar-manage, .dshdc-sidebar-restart):active { background:var(--dshdc-active); }
+@media (prefers-reduced-motion:reduce) { :root[data-dshdc-restart="restarting"] .dshdc-sidebar-restart > svg { animation:none; } }
+/* Desktop DSH draws window controls over the top strip (40px on Windows); keep dialogs below it. */
+.dshdc-dialog { --dshdc-frame-top:var(--dsh-frame-chrome-top, var(--dsh-frame-top-clearance, 0px));
+  top:var(--dshdc-frame-top); color-scheme:inherit; box-sizing:border-box; width:min(640px, calc(100vw - 32px));
+  max-height:min(80vh, calc(100dvh - var(--dshdc-frame-top) - 32px)); padding:24px; border:0; border-radius:var(--dsw-radius-panel, 12px);
   background:var(--dshdc-surface); color:var(--dshdc-text);
   box-shadow:var(--dsw-elevation-prominent, 0 0 0 1px var(--dshdc-border), 0 16px 48px #0003);
   font:inherit; font-family:var(--dsw-font-family, system-ui, sans-serif); line-height:1.5; overflow:auto; pointer-events:auto; }
@@ -1430,32 +1578,75 @@ function ensureLayer() {
   --dshdc-soft:color-mix(in srgb,var(--dshdc-surface) 95%,var(--dshdc-text));
   --dshdc-tint:color-mix(in srgb,var(--dshdc-focus) 9%,var(--dshdc-surface));
   --dshdc-accent-text:color-mix(in srgb,var(--dshdc-focus) 82%,var(--dshdc-text));
-  width:min(1180px,calc(100vw - 48px)); height:min(860px,calc(100dvh - 48px));
-  max-height:calc(100dvh - 48px); padding:0; font-size:14px;
+  --dshdc-space:20px;
+  width:min(920px,calc(100vw - 48px)); height:min(660px,calc(100dvh - var(--dshdc-frame-top) - 40px));
+  max-height:calc(100dvh - var(--dshdc-frame-top) - 40px); padding:0; font-size:14px;
 }
 #dshdc-manager[open] { display:flex; flex-direction:column; overflow:hidden; }
 #dshdc-manager svg, #dshdc-batch-preview svg { flex-shrink:0; }
-#dshdc-manager button { display:inline-flex; align-items:center; justify-content:center; gap:7px; }
-#dshdc-manager > .dshdc-manager-header { flex-shrink:0; align-items:center; gap:8px; padding:14px 24px;
+#dshdc-manager button { display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+#dshdc-manager > .dshdc-manager-header { flex-shrink:0; align-items:center; gap:6px; padding:8px 12px 8px var(--dshdc-space);
   margin:0; background:var(--dshdc-surface); border-bottom:1px solid var(--dshdc-border); }
-.dshdc-manager-heading { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
+#dshdc-manager > .dshdc-manager-header > button:where(:not(.dshdc-close)) { min-height:34px; padding:6px 10px;
+  border-color:transparent; font-size:13px; color:var(--dshdc-muted); }
+#dshdc-manager > .dshdc-manager-header > button:where(:not(.dshdc-close)):hover:not(:disabled),
+#dshdc-manager > .dshdc-manager-header > button[aria-expanded="true"] { color:var(--dshdc-text); }
+#dshdc-manager > .dshdc-manager-header > button[aria-expanded="true"] { background:var(--dshdc-soft); }
+.dshdc-manager-heading { display:flex; align-items:center; gap:10px; flex:none; min-width:0; }
 .dshdc-manager-heading > div { min-width:0; }
-.dshdc-manager-mark { display:flex; align-items:center; justify-content:center; width:42px; height:42px;
-  color:var(--dshdc-focus); background:var(--dshdc-tint); border-radius:12px; }
-.dshdc-manager-mark svg { width:23px; height:23px; }
-.dshdc-manager-heading h2 { margin:0; font-size:21px; line-height:1.35; font-weight:650; letter-spacing:-.02em; }
+.dshdc-manager-mark { display:flex; align-items:center; justify-content:center; width:32px; height:32px;
+  color:var(--dshdc-focus); background:var(--dshdc-tint); border-radius:10px; }
+.dshdc-manager-mark svg { width:18px; height:18px; }
+.dshdc-manager-heading h2 { margin:0; font-size:16px; line-height:1.35; font-weight:650; letter-spacing:-.01em; white-space:nowrap; }
 .dshdc-manager-heading p { margin:3px 0 0; font-size:12px; color:var(--dshdc-muted); }
 #dshdc-manager .dshdc-close { width:44px; padding:0; font-size:0; border-color:transparent; }
 .dshdc-manager-body { display:flex; flex:1; flex-direction:column; min-height:0; overflow:hidden; }
-.dshdc-manager-controls { flex-shrink:0; max-height:50%; overflow:auto; padding:0 24px 10px;
+.dshdc-manager-controls { flex-shrink:0; max-height:50%; overflow:auto; padding:0 var(--dshdc-space) 8px;
   scrollbar-gutter:stable; overscroll-behavior:contain; }
-.dshdc-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; padding:14px 0; }
-.dshdc-metric { display:flex; align-items:baseline; justify-content:space-between; gap:8px; min-width:0;
-  padding:0 20px; border-left:1px solid var(--dshdc-border); font-variant-numeric:tabular-nums; }
-.dshdc-metric:first-child { border-left:0; padding-left:0; }
-.dshdc-metric:last-child { padding-right:0; }
+.dshdc-view-tabs { display:flex; flex:none; gap:2px; margin:0 auto 0 14px; padding:3px;
+  border-radius:10px; background:var(--dshdc-soft); }
+#dshdc-manager .dshdc-view-tabs button { border:1px solid transparent; background:transparent;
+  min-height:30px; padding:4px 14px; border-radius:7px; font-size:13px; color:var(--dshdc-muted); white-space:nowrap; }
+#dshdc-manager .dshdc-view-tabs button:hover:not([aria-selected="true"]) { color:var(--dshdc-text); background:transparent; }
+#dshdc-manager .dshdc-view-tabs button[aria-selected="true"] { background:var(--dshdc-surface); font-weight:600;
+  border-color:var(--dshdc-border); color:var(--dshdc-text); box-shadow:0 1px 2px #0000000f; }
+.dshdc-storage-view { flex:1; min-height:0; overflow:auto; padding:16px var(--dshdc-space) 20px; overscroll-behavior:contain;
+  background:var(--dshdc-soft); }
+.dshdc-storage-cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:start; }
+.dshdc-storage-card { display:flex; flex-direction:column; gap:14px; min-width:0; padding:16px;
+  border:1px solid var(--dshdc-border); border-radius:12px; background:var(--dshdc-surface); }
+.dshdc-storage-card-head { display:flex; align-items:flex-start; gap:12px; }
+.dshdc-storage-card-mark { display:flex; flex:none; align-items:center; justify-content:center; width:32px; height:32px;
+  border-radius:9px; color:var(--dshdc-focus); background:var(--dshdc-tint); }
+.dshdc-storage-card-head h4 { margin:2px 0 4px; font-size:14px; font-weight:650; }
+.dshdc-storage-card-head .dshdc-hint { margin:0; }
+.dshdc-storage-fields .dshdc-field { gap:6px; }
+.dshdc-storage-fields input[type="number"] { max-width:180px; margin:0; }
+.dshdc-storage-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-top:auto; }
+#dshdc-manager .dshdc-storage-actions button { min-height:36px; padding:6px 14px; font-size:13px; }
+.dshdc-storage-notice { grid-column:1/-1; margin:0; white-space:pre-wrap; }
+.dshdc-storage-notice:empty { display:none; }
+.dshdc-storage-notice:not(:empty) { padding:10px 14px; border-radius:9px; border-left:3px solid var(--dshdc-focus); background:var(--dshdc-surface); }
+/* File picker: the native input stays on top, transparent, so clicks and keyboard work unchanged. */
+.dshdc-file-picker { position:relative; }
+.dshdc-file-picker > input[type="file"] { position:absolute; inset:auto 0 0 0; height:56px; min-height:0; margin:0; padding:0;
+  opacity:0; cursor:pointer; z-index:1; }
+.dshdc-file-face { display:flex; align-items:center; justify-content:center; gap:8px; box-sizing:border-box; min-height:56px;
+  padding:8px 14px; border:1px dashed color-mix(in srgb,var(--dshdc-border) 60%,var(--dshdc-muted)); border-radius:10px;
+  color:var(--dshdc-muted); font-size:13px; background:var(--dshdc-soft); }
+.dshdc-file-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dshdc-file-picker:hover:not(:has(input:disabled)) .dshdc-file-face { border-color:var(--dshdc-focus); color:var(--dshdc-text); }
+.dshdc-file-picker:has(input:disabled) .dshdc-file-face { opacity:.55; }
+.dshdc-file-picker > input[type="file"]:disabled { cursor:not-allowed; }
+.dshdc-file-picker:has(input:focus-visible) .dshdc-file-face { outline:2px solid var(--dshdc-focus); outline-offset:2px; }
+.dshdc-file-picker[data-selected="true"] .dshdc-file-face { border-style:solid; border-color:color-mix(in srgb,var(--dshdc-focus) 40%,var(--dshdc-border));
+  color:var(--dshdc-accent-text); background:var(--dshdc-tint); }
+.dshdc-summary { display:flex; flex-wrap:wrap; gap:6px; padding:8px 0 6px; }
+.dshdc-metric { display:inline-flex; align-items:baseline; gap:6px; min-width:0; padding:1px 10px; line-height:20px;
+  border:1px solid var(--dshdc-border); border-radius:999px; font-variant-numeric:tabular-nums; }
+.dshdc-metric:first-child { background:var(--dshdc-tint); border-color:color-mix(in srgb,var(--dshdc-focus) 28%,var(--dshdc-border)); }
 .dshdc-metric > span { font-size:12px; color:var(--dshdc-muted); white-space:nowrap; }
-.dshdc-metric > strong { font-size:18px; font-weight:650; white-space:nowrap; }
+.dshdc-metric > strong { font-size:13px; font-weight:650; white-space:nowrap; }
 .dshdc-source-tools { margin:0 0 10px; font-size:12px; color:var(--dshdc-muted); }
 .dshdc-source-panel { padding:16px; margin:12px 0; border:1px solid var(--dshdc-border);
   border-radius:12px; background:var(--dshdc-soft); }
@@ -1467,22 +1658,27 @@ function ensureLayer() {
 .dshdc-source-panel form > .dshdc-field:has(input[type="url"]) { grid-column:1/-1; }
 .dshdc-source-feedback:empty { display:none; }
 .dshdc-source-feedback[data-tone="error"] { color:var(--dshdc-danger); }
-.dshdc-main-filters { grid-template-columns:2fr 1fr 1fr; }
+.dshdc-main-filters { grid-template-columns:2fr 1fr 1fr; gap:8px; }
 .dshdc-main-filters > .dshdc-field:has(input[type="search"]) { grid-column:auto; }
+/* Placeholders and the selected option name each control; the label stays for assistive tech. */
+.dshdc-main-filters > .dshdc-field > label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+#dshdc-manager .dshdc-main-filters :is(input,select) { min-height:38px; padding-block:6px; font-size:13px; }
 .dshdc-search-control { display:flex; align-items:center; min-width:0; position:relative; }
 .dshdc-search-control > svg { position:absolute; left:12px; color:var(--dshdc-muted); pointer-events:none; }
 .dshdc-search-control input { padding-inline:38px 42px; }
 .dshdc-search-control input::-webkit-search-cancel-button { -webkit-appearance:none; }
 #dshdc-manager .dshdc-search-control button { position:absolute; right:2px; width:40px; padding:0; border-color:transparent; }
-.dshdc-filter-tools { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:10px 0 8px; }
-.dshdc-status-filters { display:flex; gap:4px; flex-wrap:wrap; }
-#dshdc-manager .dshdc-status-filter { min-height:36px; padding:6px 10px; border:1px solid transparent;
+.dshdc-filter-tools { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:8px 0 0; }
+.dshdc-status-filters { display:flex; gap:2px; flex-wrap:wrap; }
+#dshdc-manager .dshdc-status-filter { min-height:32px; padding:4px 10px; border:1px solid transparent;
   border-radius:7px; font-size:12px; color:var(--dshdc-muted); white-space:nowrap; }
 .dshdc-status-filter > span { min-width:16px; font-size:11px; font-variant-numeric:tabular-nums; }
 #dshdc-manager .dshdc-status-filter[aria-pressed="true"] { background:var(--dshdc-tint); color:var(--dshdc-accent-text);
   border-color:color-mix(in srgb,var(--dshdc-focus) 24%,transparent); font-weight:600; }
 .dshdc-filter-actions { display:flex; align-items:center; gap:4px; flex-shrink:0; }
-#dshdc-manager .dshdc-filter-actions button { min-height:36px; padding:6px 9px; font-size:12px; }
+#dshdc-manager .dshdc-filter-actions button { min-height:32px; padding:4px 9px; font-size:12px; border-color:transparent; color:var(--dshdc-muted); }
+#dshdc-manager .dshdc-filter-actions button:is(:hover:not(:disabled),[aria-expanded="true"]) { color:var(--dshdc-text); }
+#dshdc-manager .dshdc-filter-actions button[aria-expanded="true"] { background:var(--dshdc-soft); }
 #dshdc-manager .dshdc-text-button { border-color:transparent; color:var(--dshdc-muted); }
 #dshdc-advanced-filters { grid-template-columns:repeat(3,minmax(0,1fr)); padding:12px; margin-bottom:8px;
   background:var(--dshdc-soft); border-radius:10px; }
@@ -1497,44 +1693,57 @@ function ensureLayer() {
 .dshdc-rules .dshdc-filters { grid-template-columns:repeat(2,minmax(0,1fr)); margin:8px 12px; }
 .dshdc-rules > p { margin:10px 12px; }
 .dshdc-rules > button { margin:0 12px 12px; }
-#dshdc-manager-notice { flex-shrink:0; max-height:82px; overflow:auto; padding:8px 24px;
+#dshdc-manager-notice { flex-shrink:0; max-height:82px; overflow:auto; padding:6px var(--dshdc-space);
   white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.6; color:var(--dshdc-muted);
   border-top:1px solid var(--dshdc-border); background:var(--dshdc-soft); }
 #dshdc-manager-notice:empty { display:none; }
 .dshdc-list-section { display:flex; flex:1; flex-direction:column; min-height:80px; border-top:1px solid var(--dshdc-border); }
-.dshdc-list-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 24px;
-  flex-shrink:0; border-bottom:1px solid var(--dshdc-border); }
-.dshdc-selection-tools { display:flex; align-items:center; flex-wrap:wrap; gap:4px; min-width:0; }
-.dshdc-page-selection { display:flex; align-items:center; min-height:44px; gap:8px; margin-right:8px; cursor:pointer; font-size:12px; }
-.dshdc-result-count { padding-right:10px; color:var(--dshdc-muted); font-size:12px; white-space:nowrap; }
-#dshdc-manager .dshdc-selection-tools button { padding:6px 8px; border-color:transparent; font-size:12px; }
+.dshdc-list-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px var(--dshdc-space) 4px 12px;
+  flex-shrink:0; border-bottom:1px solid var(--dshdc-border); background:var(--dshdc-soft); }
+.dshdc-selection-tools { display:flex; align-items:center; flex-wrap:wrap; gap:2px; min-width:0; }
+.dshdc-page-selection { display:flex; align-items:center; min-height:36px; gap:8px; margin-right:6px; padding-left:13px; cursor:pointer; font-size:12px; }
+.dshdc-result-count { padding-right:8px; color:var(--dshdc-muted); font-size:12px; white-space:nowrap; }
+#dshdc-manager .dshdc-selection-tools button { min-height:32px; padding:4px 8px; border-color:transparent; font-size:12px; }
 .dshdc-list-sort .dshdc-field { display:flex; flex-direction:row; align-items:center; gap:8px; }
-.dshdc-list-sort select { width:142px; min-height:38px; font-size:12px; }
+.dshdc-list-sort select { width:132px; min-height:32px; padding-block:4px; font-size:12px; }
 .dshdc-records-scroll { flex:1; min-height:0; overflow:auto; scrollbar-gutter:stable; overscroll-behavior:contain; }
 .dshdc-records-scroll:focus-visible { outline:2px solid var(--dshdc-focus); outline-offset:-2px; }
-.dshdc-record { display:flex; align-items:center; gap:12px; padding:13px 20px 13px 12px;
+.dshdc-record { display:flex; align-items:center; gap:8px; padding:6px 12px 6px 9px;
   border-bottom:1px solid color-mix(in srgb,var(--dshdc-border) 65%,transparent); border-left:3px solid transparent; }
 .dshdc-record:hover { background:var(--dshdc-soft); }
 .dshdc-record[data-selected="true"] { background:var(--dshdc-tint); border-left-color:var(--dshdc-focus); }
+/* Compact density (desktop only): one line per conversation. */
+#dshdc-manager[data-density="compact"] .dshdc-record { padding-block:2px; }
+#dshdc-manager[data-density="compact"] .dshdc-select-target,
+#dshdc-manager[data-density="compact"] .dshdc-record-remove { min-height:36px; }
+#dshdc-manager[data-density="compact"] .dshdc-record-text { grid-template-columns:minmax(0,max-content) minmax(0,1fr); }
+#dshdc-manager[data-density="compact"] .dshdc-record-title { grid-column:auto; flex-wrap:nowrap; min-width:0; }
+#dshdc-manager[data-density="compact"] .dshdc-record-title > strong { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#dshdc-manager[data-density="compact"] .dshdc-record-meta { margin-top:0; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; }
+#dshdc-manager[data-density="compact"] .dshdc-record-identity { display:none; }
+/* Outline only for keyboard focus; a mouse click on a checkbox keeps the plain selected look. */
+.dshdc-record:has(:focus-visible) { box-shadow:inset 0 0 0 1px var(--dshdc-focus); }
 .dshdc-record[data-selected="true"] :is(.dshdc-record-meta,.dshdc-record-id,.dshdc-source-path,.dshdc-record-size) {
   color:color-mix(in srgb,var(--dshdc-text) 24%,var(--dshdc-muted)); }
 .dshdc-record-text { display:block; flex:1; min-width:0; cursor:pointer; }
 .dshdc-record[data-readonly="true"] .dshdc-record-text { cursor:default; }
-.dshdc-record-title { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dshdc-record-text { display:grid; grid-template-columns:auto minmax(0,1fr); column-gap:14px; align-items:center; }
+.dshdc-record-title { grid-column:1/-1; display:flex; align-items:center; gap:4px 8px; flex-wrap:wrap; }
 .dshdc-record-title > strong { min-width:0; overflow-wrap:anywhere; font-size:14px; font-weight:600; line-height:1.45; }
-.dshdc-record-meta { display:flex; align-items:center; gap:6px 16px; flex-wrap:wrap; margin-top:4px;
+.dshdc-record-meta { display:flex; align-items:center; gap:4px 14px; flex-wrap:wrap; margin-top:2px;
   color:var(--dshdc-muted); font-size:12px; }
 .dshdc-record-meta > span { display:inline-flex; align-items:center; gap:5px; }
 .dshdc-record-meta svg { width:13px; height:13px; }
 .dshdc-record-id, .dshdc-source-path { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   color:var(--dshdc-muted); font-size:11px; line-height:1.5; }
-.dshdc-record-identity { display:flex; align-items:center; flex-wrap:wrap; gap:2px 10px; min-width:0; margin-top:4px; }
+.dshdc-record-identity { display:flex; align-items:center; gap:2px 10px; min-width:0; margin-top:2px; }
+.dshdc-record-identity > * { min-width:0; }
 .dshdc-source-path { max-width:100%; padding-left:10px; border-left:1px solid var(--dshdc-border); }
 .dshdc-record-id { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
 .dshdc-record-size { width:76px; flex-shrink:0; text-align:right; color:var(--dshdc-muted); font-size:12px; font-variant-numeric:tabular-nums; }
 .dshdc-record-actions { display:flex; align-items:center; gap:12px; flex-shrink:0; }
 .dshdc-badges { display:inline-flex; flex-wrap:wrap; gap:4px; }
-.dshdc-badge { padding:2px 7px; font-size:11px; font-weight:500; line-height:1.6; border-radius:5px;
+.dshdc-badge { padding:0 6px; font-size:11px; font-weight:500; line-height:18px; border-radius:5px;
   color:var(--dshdc-muted); background:var(--dshdc-soft); border:1px solid var(--dshdc-border); }
 .dshdc-badge[data-kind="pinned"], .dshdc-badge[data-kind="idle"] { color:var(--dshdc-accent-text); border-color:color-mix(in srgb,var(--dshdc-focus) 25%,transparent); background:var(--dshdc-tint); }
 #dshdc-manager .dshdc-record-remove { min-width:44px; width:44px; padding:0; border-color:transparent; color:var(--dshdc-muted); }
@@ -1544,11 +1753,14 @@ function ensureLayer() {
 .dshdc-empty > svg { width:28px; height:28px; padding:12px; background:var(--dshdc-soft); border-radius:14px; color:var(--dshdc-muted); }
 .dshdc-empty > strong { font-size:15px; }
 .dshdc-empty > p { margin:0; font-size:13px; color:var(--dshdc-muted); }
-.dshdc-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 24px;
+.dshdc-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px var(--dshdc-space);
   flex-shrink:0; border-top:1px solid var(--dshdc-border); color:var(--dshdc-muted); font-size:12px; }
-.dshdc-pagination > div { display:flex; align-items:center; gap:10px; white-space:nowrap; }
-#dshdc-manager .dshdc-pagination button { padding:6px 10px; font-size:12px; }
-.dshdc-operation-bar { display:flex; align-items:center; gap:12px; flex-shrink:0; margin:0; padding:12px 24px;
+.dshdc-pagination > div { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+#dshdc-manager .dshdc-density { margin-left:auto; }
+#dshdc-manager .dshdc-density[aria-pressed="true"] { background:var(--dshdc-tint); color:var(--dshdc-accent-text); }
+#dshdc-manager .dshdc-pagination button { min-height:30px; padding:4px 10px; font-size:12px; border-color:transparent; }
+#dshdc-manager .dshdc-pagination button:disabled { opacity:.4; }
+.dshdc-operation-bar { display:flex; align-items:center; gap:12px; flex-shrink:0; margin:0; padding:8px 12px 8px var(--dshdc-space);
   border-top:1px solid var(--dshdc-border); background:var(--dshdc-surface); }
 .dshdc-selection-summary { flex:1; min-width:0; }
 .dshdc-selected-count { font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
@@ -1566,32 +1778,69 @@ function ensureLayer() {
 #dshdc-results { white-space:pre-wrap; overflow-wrap:anywhere; padding:0 16px; }
 #dshdc-results p { padding:12px 14px; background:var(--dshdc-soft); border-radius:9px; font-size:12px; border-left:3px solid var(--dshdc-focus); }
 #dshdc-results p[data-state="failed"], #dshdc-results p[data-state="unknown"] { border-left-color:var(--dshdc-danger); }
-#dshdc-batch-preview { width:min(680px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); }
+#dshdc-batch-preview { width:min(640px,calc(100vw - 32px)); max-height:calc(100dvh - var(--dshdc-frame-top) - 32px); }
 #dshdc-batch-preview[open] { display:flex; flex-direction:column; overflow:hidden; }
 .dshdc-preview-body { min-height:0; overflow:auto; }
 .dshdc-preview-body > p:first-child { margin-top:0; color:var(--dshdc-muted); }
-.dshdc-preview-warning { padding:12px 14px; border:1px solid var(--dshdc-border); border-radius:9px; font-size:13px; }
-.dshdc-preview-list { max-height:38vh; overflow:auto; overflow-wrap:anywhere; white-space:pre-wrap; border-block:1px solid var(--dshdc-border); }
-.dshdc-preview-list > p { padding:10px 0; margin:0; font-size:13px; border-bottom:1px solid var(--dshdc-border); }
+.dshdc-preview-warning { padding:10px 14px; border:1px solid var(--dshdc-border); border-left:3px solid
+  var(--dsw-alias-state-warning-primary, light-dark(#b45309, #f5b14c)); border-radius:9px; font-size:13px;
+  background:color-mix(in srgb,var(--dsw-alias-state-warning-primary, #d97706) 8%,var(--dshdc-surface)); }
+#dshdc-batch-preview[data-action="delete"] .dshdc-preview-warning { border-left-color:var(--dshdc-danger);
+  background:color-mix(in srgb,var(--dshdc-danger) 7%,var(--dshdc-surface)); }
+.dshdc-preview-list { display:flex; flex-direction:column; gap:6px; max-height:38vh; overflow:auto; overflow-wrap:anywhere;
+  white-space:pre-wrap; padding:2px; }
+.dshdc-preview-list > p { position:relative; margin:0; padding:9px 84px 9px 12px; font-size:13px; line-height:1.5;
+  border:1px solid var(--dshdc-border); border-radius:9px; background:var(--dshdc-soft); }
+.dshdc-preview-list strong { font-weight:600; }
+.dshdc-preview-list small { color:var(--dshdc-muted); font-size:12px; }
+.dshdc-preview-size { position:absolute; top:9px; right:12px; color:var(--dshdc-muted); font-size:12px;
+  font-variant-numeric:tabular-nums; white-space:nowrap; }
+.dshdc-dialog > p:not([class]) { color:var(--dshdc-muted); margin:0 0 12px; }
 #dshdc-batch-preview > .dshdc-actions { flex-shrink:0; margin-top:16px; }
 @keyframes dshdc-refresh { to { transform:rotate(360deg); } }
 .dshdc-refresh[data-loading="true"] svg { animation:dshdc-refresh 1s linear infinite; }
-@media (max-width:900px) {
+@media (max-height:600px) and (min-width:601px) {
+  .dshdc-summary { display:none; }
+  .dshdc-manager-controls { padding-top:8px; }
+}
+@media (max-width:720px) and (min-width:601px) {
+  .dshdc-storage-cards { grid-template-columns:1fr; }
+}
+@media (max-width:820px) and (min-width:601px) {
   .dshdc-filter-tools { align-items:flex-start; flex-direction:column; gap:4px; }
   .dshdc-filter-actions { align-self:flex-end; }
   .dshdc-rule-caption { display:none; }
 }
+@media (max-width:760px) {
+  .dshdc-manager-heading { flex:0 1 auto; }
+  .dshdc-manager-heading h2 { overflow:hidden; text-overflow:ellipsis; }
+  #dshdc-manager .dshdc-manager-header > button:where(:not(.dshdc-close)) { width:40px; padding:0; font-size:0; }
+}
 @media (max-width:600px) {
-  .dshdc-dialog { padding:16px; max-height:90vh; }
+  #dshdc-manager > .dshdc-manager-header { flex-wrap:wrap; }
+  .dshdc-manager-heading { flex:1 1 0; }
+  .dshdc-view-tabs { order:1; flex:1 0 100%; margin:0; }
+  #dshdc-manager .dshdc-view-tabs button { flex:1; }
+  #dshdc-manager { --dshdc-space:12px; }
+  #dshdc-manager .dshdc-view-tabs button { min-height:40px; padding:6px 12px; }
+  #dshdc-manager .dshdc-main-filters :is(input,select) { min-height:44px; }
+  #dshdc-manager .dshdc-pagination button { min-height:40px; }
+  .dshdc-storage-view { padding:12px; }
+  .dshdc-storage-cards { grid-template-columns:1fr; }
+  .dshdc-storage-card { padding:14px 12px; }
+  #dshdc-manager .dshdc-storage-actions button { min-height:44px; flex:1; }
+  #dshdc-manager .dshdc-density { display:none; }
+  .dshdc-dialog { padding:16px; max-height:min(90vh, calc(100dvh - var(--dshdc-frame-top) - 16px)); }
   .dshdc-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  #dshdc-manager { width:calc(100vw - 16px); height:calc(100dvh - 24px); max-height:calc(100dvh - 24px); padding:0; }
-  #dshdc-manager > .dshdc-manager-header { gap:4px; padding:12px; }
+  #dshdc-manager { width:calc(100vw - 16px); height:calc(100dvh - var(--dshdc-frame-top) - 24px);
+    max-height:calc(100dvh - var(--dshdc-frame-top) - 24px); padding:0; }
+  #dshdc-manager > .dshdc-manager-header { gap:4px 2px; padding:6px 6px 8px 12px; }
   .dshdc-manager-heading { gap:8px; }
-  .dshdc-manager-heading h2 { font-size:18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dshdc-manager-heading h2 { font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .dshdc-manager-heading p { display:none; }
-  .dshdc-manager-mark { width:34px; height:34px; border-radius:10px; }
-  #dshdc-manager .dshdc-manager-header > button { width:44px; padding:0; font-size:0; border-color:transparent; }
-  .dshdc-manager-controls { padding:10px 12px; max-height:43%; }
+  .dshdc-manager-mark { width:30px; height:30px; border-radius:9px; }
+  #dshdc-manager .dshdc-manager-header > button { width:44px; min-height:44px; padding:0; font-size:0; border-color:transparent; }
+  .dshdc-manager-controls { padding:0 12px 8px; max-height:43%; }
   .dshdc-summary, .dshdc-source-tools { display:none; }
   .dshdc-main-filters > .dshdc-field:has(input[type="search"]) { grid-column:1/-1; }
   .dshdc-main-filters > .dshdc-field > label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
@@ -1618,6 +1867,7 @@ function ensureLayer() {
   .dshdc-record { padding:12px 10px 12px 2px; gap:6px; }
   .dshdc-select-target { min-width:36px; }
   .dshdc-record-title > strong { font-size:14px; }
+  .dshdc-record-text { grid-template-columns:minmax(0,1fr); }
   .dshdc-record-meta { gap:3px 8px; font-size:11px; }
   .dshdc-record-actions { flex-direction:column; gap:0; }
   .dshdc-record-size { width:44px; text-align:center; font-size:11px; white-space:nowrap; }
@@ -1635,9 +1885,11 @@ function ensureLayer() {
   .dshdc-progress { grid-column:1/-1; }
 }
 @media (max-height:520px) {
-  #dshdc-manager { height:calc(100dvh - 16px); max-height:calc(100dvh - 16px); }
-  #dshdc-manager > .dshdc-manager-header { padding-block:8px; }
-  .dshdc-manager-controls { max-height:25%; }
+  .dshdc-view-tabs { padding:2px; }
+  .dshdc-manager-heading p { display:none; }
+  #dshdc-manager { height:calc(100dvh - var(--dshdc-frame-top) - 16px); max-height:calc(100dvh - var(--dshdc-frame-top) - 16px); }
+  #dshdc-manager > .dshdc-manager-header { padding-block:0; }
+  .dshdc-manager-controls { max-height:20%; }
   .dshdc-list-toolbar, .dshdc-pagination { padding-block:2px; }
   .dshdc-summary { display:none; }
   .dshdc-operation-bar { padding-block:8px; }
@@ -1813,6 +2065,130 @@ function confirmDeletion(sessionId, row) {
     dialog.showModal()
     cancel.focus()
   })
+}
+
+// ---------------------------------------------------------------- 重启 DSH
+
+/** <html data-dshdc-restart>: '' (button hidden) | 'ready' | 'restarting'. */
+const restartState = () => document.documentElement?.dataset?.dshdcRestart || ''
+
+function setRestartState(state) {
+  const root = document.documentElement
+  if (!root?.dataset) return
+  if (state) root.dataset.dshdcRestart = state
+  else delete root.dataset.dshdcRestart
+  for (const button of document.querySelectorAll?.('.dshdc-sidebar-restart') ?? []) {
+    button.disabled = state === 'restarting'
+  }
+}
+
+async function refreshRestartState() {
+  try {
+    const status = await requestJson(`${API_BASE}/restart`)
+    setRestartState(status.restarting ? 'restarting' : status.supported ? 'ready' : '')
+  } catch {
+    setRestartState('')
+  }
+}
+
+function confirmRestart(running) {
+  const t = currentT
+  const dialog = createDialog(t('restart.title'))
+  const detail = document.createElement('p')
+  detail.textContent = t('restart.body')
+  dialog.append(detail)
+  if (running > 0) {
+    const warning = document.createElement('p')
+    warning.className = 'dshdc-preview-warning'
+    warning.textContent = t('restart.running').replace('{count}', String(running))
+    dialog.append(warning)
+  }
+  const actions = document.createElement('div')
+  actions.className = 'dshdc-actions'
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.textContent = t('manage.cancel')
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = 'dshdc-primary'
+  confirm.textContent = t('restart.confirm')
+  actions.append(cancel, confirm)
+  dialog.append(actions)
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (answer) => {
+      if (settled) return
+      settled = true
+      dialog.close()
+      dialog.remove()
+      resolve(answer)
+    }
+    cancel.addEventListener('click', () => finish(false))
+    confirm.addEventListener('click', () => finish(true))
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); finish(false) })
+    dialog.addEventListener('close', () => finish(false))
+    dialog.showModal()
+    // Running work makes the restart costly; start on the safe choice then.
+    ;(running > 0 ? cancel : confirm).focus()
+  })
+}
+
+/** Covers the page while the backend shuts down, so its disconnect errors stay hidden. */
+function showRestartProgress() {
+  const t = currentT
+  const dialog = createDialog(t('restart.progress'))
+  dialog.id = 'dshdc-restart-progress'
+  dialog.setAttribute('aria-busy', 'true')
+  const hint = document.createElement('p')
+  hint.className = 'dshdc-hint'
+  hint.setAttribute('role', 'status')
+  hint.textContent = t('restart.progressHint')
+  const progress = document.createElement('progress')
+  dialog.append(hint, progress)
+  dialog.addEventListener('cancel', (event) => event.preventDefault())
+  dialog.showModal()
+  // The window process normally closes within a few seconds; explain if it does not.
+  setTimeout(() => {
+    if (!dialog.isConnected) return
+    hint.textContent = t('restart.slow')
+    progress.remove()
+    const close = document.createElement('button')
+    close.type = 'button'
+    close.textContent = t('manage.close')
+    close.addEventListener('click', () => dialog.remove())
+    const actions = document.createElement('div')
+    actions.className = 'dshdc-actions'
+    actions.append(close)
+    dialog.append(actions)
+  }, 30000)
+}
+
+let restartBusy = false
+async function requestRestart() {
+  if (restartBusy || restartState() === 'restarting') return
+  restartBusy = true
+  const t = currentT
+  try {
+    const status = await requestJson(`${API_BASE}/restart`)
+    if (!status.supported) {
+      setRestartState('')
+      notify(t('restart.unsupported'), { tone: 'error' })
+      return
+    }
+    if (!await confirmRestart(status.running || 0)) return
+    await requestJson(`${API_BASE}/restart`, { method: 'POST' })
+    setRestartState('restarting')
+    showRestartProgress()
+  } catch (error) {
+    if (error.status === 409) {
+      setRestartState('')
+      notify(t('restart.unsupported'), { tone: 'error' })
+    } else {
+      notify(`${t('restart.failed')}${error.message}`, { tone: 'error' })
+    }
+  } finally {
+    restartBusy = false
+  }
 }
 
 async function refreshSessionLists(deletedId) {
@@ -2079,6 +2455,7 @@ function apply(ctx) {
       })
   }
   primeTitleMap()
+  refreshRestartState()
   report('install', { apiBase: API_BASE, hasLayer: Boolean(layer),
     version: window.__dshChatPruneBuildVersion__ || 'source' })
 
@@ -2108,6 +2485,9 @@ function apply(ctx) {
       /** 拿一个元素试解析（排查用）：document.elementFromPoint 的结果直接喂进来。 */
       probe: (el) => ({ isRow: Boolean(resolveRow(el)), id: el ? resolveRow(el)?.id || null : null }),
       openManager,
+      requestRestart,
+      /** Re-applies the restart button state after the native slot (re)mounts. */
+      syncRestart: () => setRestartState(restartState()),
       requestDelete: (id, button) => askThenDelete(id, button || btn),
       /** 提示条自检/手动清除（排查「提示不消失」时用）。 */
       notice: () => {

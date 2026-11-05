@@ -6,19 +6,29 @@ window.__ModuleLoader__.load({
     const SLOT = 'sidebar.workspaces.session.row.action'
     const MANAGER_SLOT = 'sidebar.footer.action'
 
+    const icon = (d) => React.createElement('svg', {
+      viewBox: '0 0 24 24', width: 20, height: 20, 'aria-hidden': true,
+      fill: 'none', stroke: 'currentColor', strokeWidth: 1.6,
+      strokeLinecap: 'round', strokeLinejoin: 'round',
+    }, React.createElement('path', { d }))
+
     function ManageConversations({ wide }) {
       const isChinese = !navigator.language || /^zh/i.test(navigator.language)
       const label = isChinese ? '管理对话' : 'Manage conversations'
-      return React.createElement('button', {
-        type: 'button', className: 'dshdc-sidebar-manage',
-        'aria-label': label, title: label, 'aria-haspopup': 'dialog',
-        onClick: () => window.dshChatPrune?.openManager(),
-      }, React.createElement('svg', {
-        viewBox: '0 0 24 24', width: 20, height: 20, 'aria-hidden': true,
-        fill: 'none', stroke: 'currentColor', strokeWidth: 1.6,
-        strokeLinecap: 'round', strokeLinejoin: 'round',
-      }, React.createElement('path', { d: 'M4 5h16v12H9l-5 4V5Zm4 4h8M8 13h5' })),
-      wide ? React.createElement('span', null, label) : null)
+      const restartLabel = isChinese ? '重启 DSH' : 'Restart DSH'
+      // client-core shows the restart button (via <html data-dshdc-restart>) only where DSH can restart itself.
+      React.useEffect(() => { window.dshChatPrune?.syncRestart?.() })
+      return React.createElement('div', { className: 'dshdc-sidebar-row', 'data-wide': String(Boolean(wide)) },
+        React.createElement('button', {
+          type: 'button', className: 'dshdc-sidebar-manage',
+          'aria-label': label, title: label, 'aria-haspopup': 'dialog',
+          onClick: () => window.dshChatPrune?.openManager(),
+        }, icon('M4 5h16v12H9l-5 4V5Zm4 4h8M8 13h5'), wide ? React.createElement('span', null, label) : null),
+        wide ? React.createElement('button', {
+          type: 'button', className: 'dshdc-sidebar-restart',
+          'aria-label': restartLabel, title: restartLabel, 'aria-haspopup': 'dialog',
+          onClick: () => window.dshChatPrune?.requestRestart?.(),
+        }, icon('M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4')) : null)
     }
 
     function DeleteSessionAction({ sessionId }) {

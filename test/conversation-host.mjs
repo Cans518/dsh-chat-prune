@@ -121,7 +121,7 @@ test('real hosts: compressed batch package migrates events and attachments into 
   }).click()
   await page.locator('.dshdc-sidebar-manage').click()
   const manager = page.locator('#dshdc-manager')
-  await manager.locator('#dshdc-compression summary').click()
+  await manager.getByRole('tab', { name: '存储与迁移', exact: true }).click()
   const days = manager.getByLabel('多少天未更新后自动压缩（0 为关闭）', { exact: true })
   await days.fill('30')
   await manager.getByRole('button', { name: '保存自动压缩设置', exact: true }).click()

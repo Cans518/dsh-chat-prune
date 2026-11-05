@@ -114,6 +114,7 @@ if (process.argv[2] === '--cli') {
     assert.equal(await readFile(join(profile, 'cordis.patch.yml'), 'utf8'), '[]\n')
     for (const file of ['lib/index.js', 'lib/pruning-policy.js',
       'lib/conversation-package.js', 'lib/conversation-storage.js', 'lib/conversation-maintenance.js',
+      'lib/desktop-restart.js', 'lib/restart-watcher.js', 'lib/request-close.ps1',
       'client.js', 'client-core.js', 'client-manager.js', 'client-slot.js', 'cordis.patch.yml']) {
       assert.equal(await readFile(join(installed, file), 'utf8'), await readFile(join(sourceRoot, file), 'utf8'))
     }

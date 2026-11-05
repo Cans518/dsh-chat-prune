@@ -32,6 +32,7 @@ const LOGIC = [
   'agent-lifecycle.mjs',
   'session-sources.mjs',
   'conversation-storage.mjs',
+  'desktop-restart.mjs',
 ]
 
 const INTEGRATION = [

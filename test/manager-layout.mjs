@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import vm from 'node:vm'
 import { measureManagerContrast } from './helpers/manager-contrast.mjs'
 
 test('manager layout: themes, useful list space, keyboard flow and responsive controls', async (t) => {
@@ -41,6 +42,7 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
   const catalog = { ok: true, apiVersion: 1, managementVersion: 1, version: manifest.version,
     canDetectRunning: true, config: { backup: false }, sources, sessions, actions }
   let holdCatalog = null, releaseCatalog = null, mutations = 0, failCatalog = false
+  let restartFixture = { supported: false, running: 0 }, restartPosts = 0
   const server = createServer(async (req, res) => {
     if (req.url.startsWith('/dsh-chat-prune/')) {
       if (req.url === '/dsh-chat-prune/sessions' && req.method === 'GET' && failCatalog) {
@@ -56,6 +58,8 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
       res.writeHead(200, { 'content-type': 'application/json' })
       if (req.url === '/dsh-chat-prune/sessions' && req.method === 'GET') res.end(JSON.stringify(catalog))
       else if (req.url.startsWith('/dsh-chat-prune/ping')) res.end(JSON.stringify({ ...catalog, home: localHome }))
+      else if (req.url === '/dsh-chat-prune/restart' && req.method === 'GET') res.end(JSON.stringify({ ok: true, ...restartFixture, restarting: false }))
+      else if (req.url === '/dsh-chat-prune/restart' && req.method === 'POST') { restartPosts++; res.end(JSON.stringify({ ok: true, supported: true, restarting: true })) }
       else {
         if (!req.url.endsWith('/diag')) mutations++
         res.end(JSON.stringify({ ok: true }))
@@ -79,6 +83,81 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.goto(`http://127.0.0.1:${server.address().port}`)
+  await t.test('native sidebar entry owns a row alongside other plugins, expanded and collapsed', async () => {
+    let module, component
+    const sandbox = { window: { __ModuleLoader__: { load: (entry) => { module = entry } } },
+      navigator: { language: 'zh-CN' }, document: { querySelector: () => null, getElementById: () => null } }
+    vm.runInNewContext(await readFile(new URL('../client-slot.js', import.meta.url), 'utf8'), sandbox)
+    const plugin = module.factory(() => ({ createElement: (type, props, ...children) => ({ type, props, children }), useEffect: () => {} }))
+    plugin.apply({ effect: () => {}, slots: {
+      inject: (_name, callback) => callback(),
+      register: (options, value) => { if (options.id === 'dsh-chat-prune.manage') component = value; return () => {} },
+    } })
+    // Mirrors DSH 0.2.x SidebarRoot: footArea (column) > footerActions (non-wrapping flex row) >
+    // one display:contents slot anchor holding every registrant, here the host's Cordis entry first.
+    for (const [width, wide] of [[244, true], [180, true], [56, false]]) {
+      await page.evaluate(({ tree, width, wide }) => {
+        function render(tree) {
+          if (typeof tree === 'string') return document.createTextNode(tree)
+          const node = document.createElementNS(tree.type === 'svg' || tree.type === 'path'
+            ? 'http://www.w3.org/2000/svg' : 'http://www.w3.org/1999/xhtml', tree.type)
+          for (const [key, value] of Object.entries(tree.props || {})) {
+            if (key.startsWith('on')) continue
+            node.setAttribute(key === 'className' ? 'class' : key.startsWith('stroke')
+              ? key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`) : key, String(value))
+          }
+          for (const child of tree.children.filter(Boolean)) node.append(render(child))
+          return node
+        }
+        const column = document.createElement('div')
+        column.id = 'sidebar-fixture'
+        column.style.cssText = `display:flex;flex-direction:column;box-sizing:border-box;width:${width}px;padding:8px ${wide ? 8 : 10}px;background:#f4f6fa;${wide ? '' : 'align-items:center'}`
+        column.innerHTML = `<div class="foot-actions" style="display:flex;flex:none;min-width:0;${wide ? 'width:100%' : 'width:auto;justify-content:center'}">
+          <div data-slot="sidebar.footer.action" style="display:contents">
+            <div class="cordis-layer" style="display:flex;flex:none;align-items:center;margin:8px 0 0;position:relative;${wide ? 'width:100%;height:42px' : 'width:36px;height:36px;margin:0'}">
+              <button type="button" style="width:${wide ? 'calc(100% + 4px)' : '36px'};height:${wide ? 42 : 36}px;margin:0 ${wide ? -2 : 0}px;border:0;border-radius:12px;background:#e6eaf2">${wide ? '动态插件' : 'C'}</button>
+            </div>
+          </div>
+        </div><div class="settings" style="height:42px;width:100%">设置</div>`
+        column.querySelector('[data-slot]').append(render(tree))
+        document.body.append(column)
+      }, { tree: JSON.parse(JSON.stringify(component({ wide }))), width, wide })
+      const row = page.locator('#sidebar-fixture .dshdc-sidebar-row')
+      const entry = row.locator('.dshdc-sidebar-manage')
+      const restart = page.locator('#sidebar-fixture .dshdc-sidebar-restart')
+      const box = await row.boundingBox()
+      const cordis = await page.locator('#sidebar-fixture .cordis-layer').boundingBox()
+      const settings = await page.locator('#sidebar-fixture .settings').boundingBox()
+      assert.ok(box.y >= cordis.y + cordis.height, `Manager starts its own row below other footer plugins at ${width}px`)
+      assert.ok(box.y + box.height <= settings.y + 0.5, 'Manager stays above the settings row')
+      if (wide) {
+        assert.equal(await restart.isVisible(), false, 'Restart stays hidden until the host supports it')
+        await page.evaluate(() => { document.documentElement.dataset.dshdcRestart = 'ready' })
+        assert.ok(Math.abs(cordis.width - (width - 16)) < 1, 'Other footer plugins keep their full width')
+        assert.ok(Math.abs(box.width - cordis.width - 4) < 1, 'Manager row spans the footer like native entries')
+        assert.equal(Math.round(box.height), 42)
+        const manageBox = await entry.boundingBox()
+        const restartBox = await restart.boundingBox()
+        const iconLeft = await entry.locator('svg').evaluate((element) => element.getBoundingClientRect().left)
+        assert.ok(Math.abs(iconLeft - (box.x + 8)) < 1, 'Icon and label start at the left like native entries')
+        assert.deepEqual([Math.round(restartBox.width), Math.round(restartBox.height)], [36, 42])
+        assert.ok(Math.abs(restartBox.x + restartBox.width - (box.x + box.width)) < 1, 'Restart sits at the right end of the row')
+        assert.ok(manageBox.x + manageBox.width <= restartBox.x, 'Manage and restart do not overlap')
+        assert.equal(await entry.locator('span').evaluate((element) => element.scrollWidth <= element.clientWidth || getComputedStyle(element).textOverflow === 'ellipsis'), true)
+        await page.evaluate(() => { document.documentElement.dataset.dshdcRestart = 'restarting' })
+        await page.locator('#sidebar-fixture').screenshot({ path: fileURLToPath(new URL(`sidebar-${width}-restarting.png`, artifactDirectory)) })
+        await page.evaluate(() => { document.documentElement.dataset.dshdcRestart = 'ready' })
+      } else {
+        await page.evaluate(() => { document.documentElement.dataset.dshdcRestart = 'ready' })
+        assert.equal(await restart.count(), 0, 'The collapsed rail has no restart button')
+        assert.deepEqual([Math.round(box.width), Math.round(box.height)], [36, 36], 'Collapsed rail uses the native icon size')
+        assert.ok(Math.abs((box.x + box.width / 2) - (cordis.x + cordis.width / 2)) < 1, 'Collapsed icons share one centre line')
+      }
+      await page.locator('#sidebar-fixture').screenshot({ path: fileURLToPath(new URL(`sidebar-${width}.png`, artifactDirectory)) })
+      await page.locator('#sidebar-fixture').evaluate((element) => element.remove())
+      await page.evaluate(() => { delete document.documentElement.dataset.dshdcRestart })
+    }
+  })
   await page.locator('#dshdc-manage').click()
   const manager = page.locator('#dshdc-manager')
   await manager.locator('.dshdc-record').first().waitFor()
@@ -125,7 +204,8 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
     assert.ok(bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height)
     assert.equal(await manager.evaluate((element) => element.scrollWidth <= element.clientWidth), true)
     const list = manager.locator('.dshdc-records-scroll')
-    assert.ok((await list.boundingBox()).height >= minimumListHeight, 'Conversations retain usable vertical space')
+    const listHeight = (await list.boundingBox()).height
+    assert.ok(listHeight >= minimumListHeight, `Conversations retain usable vertical space at ${viewport.width}x${viewport.height}: ${listHeight}px`)
     for (const control of [
       manager.getByRole('button', { name: '预览所选操作', exact: true }),
       manager.getByRole('button', { name: '关闭', exact: true }),
@@ -141,12 +221,49 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
     await t.test(`${name} theme has readable contrast and preserves the current selection`, async () => {
       await setPalette(palette)
       await assertLayout(200)
+      const bounds = await manager.boundingBox()
+      assert.ok(bounds.width <= 920 && bounds.height <= 660, 'Desktop manager stays compact')
+      const visibleRows = await manager.locator('.dshdc-records-scroll').evaluate((list) => {
+        const view = list.getBoundingClientRect()
+        return [...list.querySelectorAll('.dshdc-record')].filter((row) => row.getBoundingClientRect().bottom <= view.bottom + 1).length
+      })
+      assert.ok(visibleRows >= 5, `Compact desktop view shows several whole conversations: ${visibleRows}`)
       assert.equal(await manager.locator('.dshdc-record input:checked').count(), 2)
       const ratios = await manager.evaluate(measureManagerContrast)
       for (const [role, ratio] of Object.entries(ratios)) assert.ok(ratio >= 4.5, `${name} ${role} contrast is ${ratio}`)
       await manager.screenshot({ path: fileURLToPath(new URL(`${name}.png`, artifactDirectory)) })
     })
   }
+  await t.test('desktop title bar keeps window controls clear of the manager', async () => {
+    const frame = (enabled) => page.evaluate((enabled) => {
+      const root = document.documentElement
+      if (enabled) {
+        root.setAttribute('data-windows-titlebar', '')
+        root.style.setProperty('--dsh-windows-titlebar-height', '40px')
+        root.style.setProperty('--dsh-frame-chrome-top', 'var(--dsh-windows-titlebar-height)')
+      } else {
+        root.removeAttribute('data-windows-titlebar')
+        root.style.removeProperty('--dsh-windows-titlebar-height')
+        root.style.removeProperty('--dsh-frame-chrome-top')
+      }
+    }, enabled)
+    try {
+      for (const viewport of [{ width: 1280, height: 720 }, { width: 1024, height: 640 }, { width: 900, height: 560 }]) {
+        await page.setViewportSize(viewport)
+        await frame(true)
+        const bounds = await manager.boundingBox()
+        assert.ok(bounds.y >= 40 + 8, `Manager clears the 40px title bar at ${viewport.width}x${viewport.height}: top ${bounds.y}`)
+        assert.ok(bounds.y + bounds.height <= viewport.height, 'Manager fits below the title bar')
+        const closeBox = await manager.getByRole('button', { name: '关闭', exact: true }).boundingBox()
+        assert.ok(closeBox.y >= 40, 'Close stays out of the native window-control strip')
+        await assertLayout(viewport.height < 600 ? 120 : 200)
+        if (viewport.width === 1280) await page.screenshot({ path: fileURLToPath(new URL('titlebar.png', artifactDirectory)) })
+      }
+    } finally {
+      await frame(false)
+      await page.setViewportSize({ width: 1400, height: 950 })
+    }
+  })
   await t.test('preview cancellation returns focus and cannot perform a mutation', async () => {
     const preview = manager.getByRole('button', { name: '预览所选操作', exact: true })
     await preview.click()
@@ -163,6 +280,25 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
     assert.equal(await manager.getByRole('searchbox').evaluate((element) => element === document.activeElement), true)
     await manager.locator('.dshdc-records-scroll').evaluate((element) => { element.scrollTop = 0 })
   })
+  await t.test('section navigation preserves selection, supports keyboard and returns search to the list', async () => {
+    const conversations = manager.getByRole('tab', { name: '对话列表', exact: true })
+    await conversations.focus()
+    await page.keyboard.press('ArrowRight')
+    assert.equal(await manager.getByRole('tab', { name: '存储与迁移', exact: true }).getAttribute('aria-selected'), 'true')
+    assert.equal(await manager.locator('.dshdc-operation-bar').isVisible(), false)
+    assert.equal(await manager.locator('#dshdc-compression').isVisible(), true)
+    await manager.screenshot({ path: fileURLToPath(new URL('storage.png', artifactDirectory)) })
+    await page.keyboard.press('/')
+    assert.equal(await manager.getByRole('searchbox').evaluate((element) => element === document.activeElement), true)
+    assert.equal(await manager.locator('.dshdc-record input:checked').count(), 2)
+    const row = manager.locator('.dshdc-record').first()
+    const comfortable = (await row.boundingBox()).height
+    await manager.getByRole('button', { name: '紧凑列表', exact: true }).click()
+    assert.ok((await row.boundingBox()).height < comfortable)
+    assert.equal(await manager.locator('.dshdc-record input:checked').count(), 2)
+    await manager.getByRole('button', { name: '紧凑列表', exact: true }).click()
+    assert.equal(mutations, 0)
+  })
   await t.test('portrait, small phone and landscape keep content and primary controls reachable', async () => {
     for (const viewport of [{ width: 375, height: 700 }, { width: 320, height: 640 }, { width: 812, height: 375 }]) {
       await page.setViewportSize(viewport)
@@ -171,6 +307,10 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
       if (viewport.width === 375) await manager.screenshot({
         path: fileURLToPath(new URL('mobile.png', artifactDirectory)),
       })
+      await manager.getByRole('tab', { name: '存储与迁移', exact: true }).click()
+      assert.equal(await manager.locator('.dshdc-storage-view').evaluate((element) => element.scrollWidth <= element.clientWidth), true)
+      if (viewport.width === 375) await manager.screenshot({ path: fileURLToPath(new URL('storage-mobile.png', artifactDirectory)) })
+      await manager.getByRole('tab', { name: '对话列表', exact: true }).click()
     }
   })
   await t.test('the retention shortcut reveals rules and editing a generated plan clears stale candidates', async () => {
@@ -206,6 +346,36 @@ test('manager layout: themes, useful list space, keyboard flow and responsive co
     releaseCatalog()
     await page.waitForFunction(() => document.querySelector('#dshdc-manager')?.getAttribute('aria-busy') === 'false')
     assert.deepEqual(errors, [])
+    assert.equal(mutations, 0)
+  })
+  await t.test('restart asks once, warns about running conversations and then covers the page', async () => {
+    restartFixture = { supported: true, running: 2 }
+    try {
+      const ask = () => page.evaluate(() => { window.dshChatPrune.requestRestart() })
+      const confirmation = page.getByRole('dialog', { name: '重启 DSH', exact: true })
+      await ask()
+      await confirmation.waitFor()
+      assert.match(await confirmation.innerText(), /有 2 个对话正在运行，重启会中断它们/)
+      assert.equal(await confirmation.getByRole('button', { name: '取消', exact: true })
+        .evaluate((element) => element === document.activeElement), true, 'Running work focuses the safe choice')
+      await page.screenshot({ path: fileURLToPath(new URL('restart-confirm.png', artifactDirectory)) })
+      await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+      await confirmation.waitFor({ state: 'detached' })
+      assert.equal(restartPosts, 0, 'Cancelling never shuts DSH down')
+      await ask()
+      await confirmation.getByRole('button', { name: '立即重启', exact: true }).click()
+      const progress = page.locator('#dshdc-restart-progress')
+      await progress.waitFor()
+      assert.equal(restartPosts, 1)
+      assert.match(await progress.innerText(), /正在保存对话并关闭/)
+      assert.equal(await page.evaluate(() => document.documentElement.dataset.dshdcRestart), 'restarting')
+      await ask()
+      assert.equal(restartPosts, 1, 'A restart in progress is not requested twice')
+      await progress.evaluate((element) => element.remove())
+    } finally {
+      restartFixture = { supported: false, running: 0 }
+      await page.evaluate(() => { delete document.documentElement.dataset.dshdcRestart })
+    }
     assert.equal(mutations, 0)
   })
   await t.test('initial load failure has a retry action and is not presented as an empty library', async () => {

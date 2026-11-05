@@ -12,12 +12,15 @@ function fixture(refresh = async () => {}) {
   const React = {
     createElement: (type, props, ...children) => ({ type, props, children }),
     useState: (initial) => [initial, (value) => states.push(value)],
+    useEffect: (effect) => effect(),
   }
   const window = {
     __ModuleLoader__: { load: (value) => { registered = value } },
     dshChatPrune: {
       requestDelete: async (...args) => { calls.push(args) },
       openManager: () => calls.push('manager'),
+      requestRestart: () => calls.push('restart'),
+      syncRestart: () => calls.push('sync'),
     },
   }
   const sandbox = { window, navigator: { language: 'zh-CN' }, document: { querySelector: () => null } }
@@ -130,11 +133,18 @@ test('manager uses the sidebar footer slot in expanded and collapsed layouts', (
   const f = fixture()
   const component = f.registrations.get('sidebar.footer.action')
   const wide = component({ wide: true }), collapsed = component({ wide: false })
-  assert.equal(wide.props['aria-label'], '管理对话')
-  assert.equal(wide.children[1].children[0], '管理对话')
-  assert.equal(collapsed.children[1], null)
-  collapsed.props.onClick()
-  assert.deepEqual(f.calls, ['manager'])
+  const [manage, restart] = wide.children
+  assert.equal(wide.props.className, 'dshdc-sidebar-row')
+  assert.equal(manage.props['aria-label'], '管理对话')
+  assert.equal(manage.children[1].children[0], '管理对话')
+  assert.equal(restart.props.className, 'dshdc-sidebar-restart')
+  assert.equal(restart.props['aria-label'], '重启 DSH')
+  assert.equal(collapsed.children[0].children[1], null)
+  assert.equal(collapsed.children[1], null, 'The collapsed rail has no restart button')
+  f.calls.length = 0
+  collapsed.children[0].props.onClick()
+  restart.props.onClick()
+  assert.deepEqual(f.calls, ['manager', 'restart'])
   assert.equal(f.window.__dshChatPruneManagerSlotReady__, true)
   f.cleanup()
   assert.equal(f.window.__dshChatPruneManagerSlotReady__, false)
