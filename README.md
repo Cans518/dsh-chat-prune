@@ -120,20 +120,20 @@ dsh plugin --profile desktop add github:Cans518/dsh-chat-prune
 如需固定在特定的发版环境，可直接引用 Release 发布的包地址：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.6.0/dsh-chat-prune-0.6.0.tgz
+dsh plugin --profile desktop add https://github.com/Cans518/dsh-chat-prune/releases/download/v0.6.1/dsh-chat-prune-0.6.1.tgz
 ```
 
 ### 方式 3：离线包下载校验后安装
 
-在 [Releases 发布页面](https://github.com/Cans518/dsh-chat-prune/releases/latest) 下载 `dsh-chat-prune-0.6.0.tgz` 与 `SHA256SUMS.txt`，校验哈希后本地安装：
+在 [Releases 发布页面](https://github.com/Cans518/dsh-chat-prune/releases/latest) 下载 `dsh-chat-prune-0.6.1.tgz` 与 `SHA256SUMS.txt`，校验哈希后本地安装：
 
 ```powershell
 # 校验哈希（可选）
-(Get-FileHash .\dsh-chat-prune-0.6.0.tgz -Algorithm SHA256).Hash
+(Get-FileHash .\dsh-chat-prune-0.6.1.tgz -Algorithm SHA256).Hash
 Get-Content .\SHA256SUMS.txt
 
 # 本地安装
-dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.6.0.tgz"
+dsh plugin --profile desktop add "C:\Downloads\dsh-chat-prune-0.6.1.tgz"
 ```
 
 > **注意**：
